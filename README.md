@@ -1,3 +1,4 @@
+```markdown
 # Piper Python SDK
 
 [![PyPI version](https://badge.fury.io/py/piper-sdk.svg)](https://badge.fury.io/py/piper-sdk) <!-- Optional: Only works after publishing to PyPI -->
@@ -20,16 +21,20 @@ This allows agents to access secrets stored in Google Secret Manager on behalf o
 
 ```bash
 pip install piper-sdk
-Use code with caution.
-Markdown
-(Note: This command will only work after the package is published to the Python Package Index (PyPI). See Publishing section below.)
+```
+*(Note: This command will only work after the package is published to the Python Package Index (PyPI). See Publishing section below.)*
+
 For now, you can install directly from GitHub (after pushing the code):
+```bash
 pip install git+https://github.com/greylab0/piper-python-sdk.git
-Use code with caution.
-Bash
-(Make sure to replace greylab0 with your actual GitHub username if it's different)
-Usage
-Important: The agent application using this SDK is responsible for determining and providing the correct user_id context for the end-user it is acting on behalf of.
+```
+*(Make sure to replace `greylab0` with your actual GitHub username if it's different)*
+
+## Usage
+
+**Important:** The agent application using this SDK is responsible for determining and providing the correct `user_id` context for the end-user it is acting on behalf of.
+
+```python
 from piper_sdk.client import PiperClient, PiperAuthError, PiperConfigError
 import os
 import logging
@@ -176,29 +181,41 @@ except ValueError as e:
     print(f"Input Value Error getting creds by ID: {e}")
 except Exception as e:
     print(f"Unexpected error getting creds by ID for user {CURRENT_USER_ID}: {e}")
-Use code with caution.
-Python
-Error Handling
-The SDK raises custom exceptions found in piper_sdk.client:
-PiperConfigError: For issues during client initialization (e.g., missing config) or if user context is missing when required.
-PiperAuthError: For errors interacting with the Piper API (authentication failures, permissions issues, mapping not found, API errors, etc.). This exception includes attributes like status_code, error_code, and error_details from the API response where available. Check these for detailed diagnosis.
-ValueError: For invalid input provided to SDK methods (e.g., empty variable name, missing user ID).
-Standard requests.exceptions.RequestException might be raised for underlying network issues, though often wrapped in PiperAuthError.
-Always wrap SDK calls in try...except blocks to handle potential errors gracefully.
-Development & Contributing
+
+```
+
+## Error Handling
+
+The SDK raises custom exceptions found in `piper_sdk.client`:
+
+*   `PiperConfigError`: For issues during client initialization (e.g., missing config) or if user context is missing when required.
+*   `PiperAuthError`: For errors interacting with the Piper API (authentication failures, permissions issues, mapping not found, API errors, etc.). This exception includes attributes like `status_code`, `error_code`, and `error_details` from the API response where available. Check these for detailed diagnosis.
+*   `ValueError`: For invalid input provided to SDK methods (e.g., empty variable name, missing user ID).
+*   Standard `requests.exceptions.RequestException` might be raised for underlying network issues, though often wrapped in `PiperAuthError`.
+
+Always wrap SDK calls in `try...except` blocks to handle potential errors gracefully.
+
+## Development & Contributing
+
 (Optional: Add setup instructions for development, testing procedures, contribution guidelines)
-Clone the repository: git clone https://github.com/greylab0/piper-python-sdk.git
-Navigate into the directory: cd piper-python-sdk
-Create a virtual environment: python -m venv venv
-Activate it: source venv/bin/activate (Linux/macOS) or venv\Scripts\activate (Windows)
-Install dependencies (including dev tools if added): pip install requests (add flake8, pytest, etc. later if needed)
-Install in editable mode: pip install -e .
-Publishing to PyPI (For Maintainers)
-Update version number in setup.py.
-Install build tools: pip install build twine
-Clean old builds: rm -rf dist/ build/ *.egg-info
-Build package: python -m build
-Upload to TestPyPI: python -m twine upload --repository testpypi dist/* (Use __token__ as username and a TestPyPI API token as password)
-Upload to PyPI: python -m twine upload dist/* (Use __token__ as username and a PyPI API token as password)
-License
-MIT License <!-- Assumes you have a LICENSE file with the MIT text -->
+
+1.  Clone the repository: `git clone https://github.com/greylab0/piper-python-sdk.git`
+2.  Navigate into the directory: `cd piper-python-sdk`
+3.  Create a virtual environment: `python -m venv venv`
+4.  Activate it: `source venv/bin/activate` (Linux/macOS) or `venv\Scripts\activate` (Windows)
+5.  Install dependencies (including dev tools if added): `pip install requests` (add flake8, pytest, etc. later if needed)
+6.  Install in editable mode: `pip install -e .`
+
+## Publishing to PyPI (For Maintainers)
+
+1.  Update version number in `setup.py`.
+2.  Install build tools: `pip install build twine`
+3.  Clean old builds: `rm -rf dist/ build/ *.egg-info`
+4.  Build package: `python -m build`
+5.  Upload to TestPyPI: `python -m twine upload --repository testpypi dist/*` (Use `__token__` as username and a TestPyPI API token as password)
+6.  Upload to PyPI: `python -m twine upload dist/*` (Use `__token__` as username and a PyPI API token as password)
+
+## License
+
+[MIT License](LICENSE)
+```
