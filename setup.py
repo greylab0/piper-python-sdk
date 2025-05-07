@@ -10,14 +10,14 @@ def read(fname):
         return "" # Return empty string if README is not found
 
 setuptools.setup(
-    name="piper-sdk",  # How users will pip install it (e.g., piper-sdk)
+    name="pyper-sdk",  # How users will pip install it (e.g., piper-sdk)
     version="0.1.0",  # Start with an initial version
     author="Piper", # CHANGE THIS
     author_email="devs@agentpiper.com", # CHANGE THIS
     description="Python SDK for Piper Agent Credential Management",
     long_description=read('README.md'), # Reads the README file
     long_description_content_type="text/markdown", # Format of the README
-    url="<URL to your GitHub repository (will add later)>", # CHANGE THIS LATER
+    url="https://github.com/greylab0/piper-python-sdk", # CHANGE THIS LATER
     # Automatically find the piper_sdk package
     packages=setuptools.find_packages(where=".", include=['piper_sdk*']),
     # If your code was in a 'src' directory, uncomment and adjust below:
@@ -47,8 +47,8 @@ setuptools.setup(
     ],
     keywords='piper credentials secrets sdk agent gcp sts', # Add relevant keywords
     project_urls={ # Optional: Add relevant links
-        'Documentation': '<Link to ReadTheDocs or GitHub Wiki if you have one>',
-        'Source': '<URL to your GitHub repository (will add later)>',
-        'Tracker': '<URL to GitHub Issues page>',
+        'Documentation': 'https://github.com/greylab0/piper-python-sdk/blob/main/README.md',
+        'Source': 'https://github.com/greylab0/piper-python-sdk',
+        'Tracker': 'https://github.com/greylab0/piper-python-sdk/issues',
     },
 )
