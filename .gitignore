@@ -92,3 +92,5 @@ Thumbs.db
 secrets.yaml
 secrets.json
 *_secret*.py
+
+.pypirc

@@ -48,7 +48,7 @@ class PiperClient:
 
     # Endpoint URL Templates (Allow override via init)
     TOKEN_URL_TEMPLATE = "https://piper-token-endpoint-{project_id}.{region}.run.app"
-    GET_SCOPED_URL_TEMPLATE = "https://piper-get-scoped-credentials-{project_id}.{region}.run.app"
+    GET_SCOPED_URL_TEMPLATE = "https://getscopedgcpcredentials-{project_id}.{region}.run.app"
     RESOLVE_MAPPING_URL_TEMPLATE = "https://piper-resolve-variable-mapping-{project_id}.{region}.run.app"
 
     _active_user_id: Optional[str] = None # Stores user context if set globally
