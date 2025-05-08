@@ -5,11 +5,11 @@ import time
 from urllib.parse import urlencode, urljoin
 import logging
 from typing import List, Dict, Any, Optional, Tuple
+import uuid # Added for potential instanceId generation
 
 # Configure logging for the SDK
-# Consumers of the SDK can configure logging further if needed
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - PiperSDK - %(levelname)s - %(message)s')
-logger = logging.getLogger(__name__) # Changed logger name to PiperSDK for clarity
+logger = logging.getLogger(__name__)
 
 class PiperError(Exception):
     """Base exception for all Piper SDK errors."""
@@ -20,8 +20,8 @@ class PiperAuthError(PiperError):
     def __init__(self, message: str, status_code: Optional[int] = None, error_code: Optional[str] = None, error_details: Optional[Any] = None):
         super().__init__(message)
         self.status_code = status_code
-        self.error_code = error_code # e.g., 'invalid_client', 'mapping_not_found'
-        self.error_details = error_details # Raw error details from API (dict or text)
+        self.error_code = error_code
+        self.error_details = error_details
     def __str__(self):
         details_str = f", Details: {self.error_details}" if self.error_details else ""
         status_str = f" (Status: {self.status_code})" if self.status_code is not None else ""
@@ -29,466 +29,437 @@ class PiperAuthError(PiperError):
         return f"{super().__str__()}{status_str}{code_str}{details_str}"
 
 class PiperConfigError(PiperError):
-    """Exception for configuration issues (e.g., missing user_id context)."""
+    """Exception for configuration issues (e.g., missing instanceId context)."""
     pass
+
+# Specific error for when the link needs establishing
+class PiperLinkNeededError(PiperConfigError):
+    """Exception raised when Piper Link instance ID is needed but cannot be found."""
+    def __init__(self, message="Piper Link instanceId not provided and could not be discovered locally. Is the Piper Link app/service running and configured?"):
+        super().__init__(message)
+
 
 class PiperClient:
     """
     A Python client for interacting with the Piper API.
 
-    Handles agent authentication (Client Credentials with User Context),
-    variable name to credential ID resolution, and retrieving scoped GCP STS
-    credentials for authorized secrets. Requires the User ID context for
-    most operations.
+    Handles agent authentication (Client Credentials). Obtains user context by
+    discovering a local 'Piper Link' service instance ID or accepting one explicitly.
+    Resolves variable names and retrieves scoped GCP STS credentials.
     """
     DEFAULT_TOKEN_EXPIRY_BUFFER_SECONDS: int = 60
-    # *** IMPORTANT: Update these defaults if your deployment differs ***
     DEFAULT_PROJECT_ID: str = "444535882337" # YOUR Piper GCP Project ID
     DEFAULT_REGION: str = "us-central1"     # YOUR Piper GCP Region
 
-    # Endpoint URL Templates (Allow override via init)
+    # Endpoint URL Templates
     TOKEN_URL_TEMPLATE = "https://piper-token-endpoint-{project_id}.{region}.run.app"
+    # Use the one that matches the function's actual trigger URL:
     GET_SCOPED_URL_TEMPLATE = "https://getscopedgcpcredentials-{project_id}.{region}.run.app"
     RESOLVE_MAPPING_URL_TEMPLATE = "https://piper-resolve-variable-mapping-{project_id}.{region}.run.app"
 
-    _active_user_id: Optional[str] = None # Stores user context if set globally
+    # *** NEW: Default URL for local Piper Link service ***
+    DEFAULT_PIPER_LINK_SERVICE_URL = "http://localhost:31477/piper-link-context" # Example
+
+    # --- Internal State ---
+    _discovered_instance_id: Optional[str] = None # Cache discovered ID in memory for this instance
 
     def __init__(self,
-                client_id: str,
-                client_secret: str,
-                project_id: Optional[str] = None,
-                region: Optional[str] = None,
-                token_url: Optional[str] = None,
-                get_scoped_url: Optional[str] = None,
-                resolve_mapping_url: Optional[str] = None,
-                requests_session: Optional[requests.Session] = None):
+                 client_id: str,
+                 client_secret: str,
+                 project_id: Optional[str] = None,
+                 region: Optional[str] = None,
+                 token_url: Optional[str] = None,
+                 get_scoped_url: Optional[str] = None,
+                 resolve_mapping_url: Optional[str] = None,
+                 piper_link_service_url: Optional[str] = None, # Allow overriding link service URL
+                 requests_session: Optional[requests.Session] = None,
+                 auto_discover_instance_id: bool = True): # Flag to control auto-discovery
         """
-        Initializes the Piper Client for an agent.
+        Initializes the Piper Client for a functional agent (e.g., GmailMCP).
 
         Args:
-            client_id: The agent's Client ID.
-            client_secret: The agent's Client Secret.
+            client_id: The functional agent's Client ID.
+            client_secret: The functional agent's Client Secret value.
             project_id: GCP Project ID where Piper functions are deployed.
-                        Defaults to DEFAULT_PROJECT_ID.
             region: GCP Region where Piper functions are deployed.
-                    Defaults to DEFAULT_REGION.
             token_url: (Optional) Override the default URL for the /token endpoint.
             get_scoped_url: (Optional) Override the default URL for the /get-scoped-credentials endpoint.
             resolve_mapping_url: (Optional) Override the default URL for the /resolve-variable-mapping endpoint.
+            piper_link_service_url: (Optional) Override the default URL for the local Piper Link service.
             requests_session: (Optional) A requests.Session object.
+            auto_discover_instance_id: (Optional) If True (default), attempts to discover the
+                                       instanceId from the local Piper Link service during initialization
+                                       and before API calls if needed.
         """
         if not client_id or not client_secret:
             raise ValueError("client_id and client_secret are required.")
         self.client_id: str = client_id
         self._client_secret: str = client_secret
-        # Use provided project/region or the class defaults
         self.project_id: str = project_id or self.DEFAULT_PROJECT_ID
         self.region: str = region or self.DEFAULT_REGION
 
-        # Construct endpoint URLs, allowing overrides
+        # Construct endpoint URLs
         self.token_url: str = token_url or self.TOKEN_URL_TEMPLATE.format(project_id=self.project_id, region=self.region)
         self.get_scoped_url: str = get_scoped_url or self.GET_SCOPED_URL_TEMPLATE.format(project_id=self.project_id, region=self.region)
         self.resolve_mapping_url: str = resolve_mapping_url or self.RESOLVE_MAPPING_URL_TEMPLATE.format(project_id=self.project_id, region=self.region)
+        self.piper_link_service_url: str = piper_link_service_url or self.DEFAULT_PIPER_LINK_SERVICE_URL
 
         self._session = requests_session if requests_session else requests.Session()
-        self._session.headers.update({'User-Agent': f'Piper-Python-SDK/0.1.0'}) # Update version eventually
+        # Read version from setup.py or use a fixed one initially
+        sdk_version = "0.2.0" # Example version for this feature change
+        self._session.headers.update({'User-Agent': f'Pyper-SDK/{sdk_version}'})
 
         # Internal state for caching agent tokens
-        # Cache key is now (audience, user_id_context) tuple
+        # Cache key is now (audience, instance_id) tuple
         self._access_tokens: Dict[Tuple[str, Optional[str]], str] = {}
         self._token_expiries: Dict[Tuple[str, Optional[str]], float] = {}
 
-        logger.info(f"PiperClient initialized for client_id '{self.client_id[:8]}...'.")
-        logger.info(f" Token URL: {self.token_url}")
-        logger.info(f" Resolve URL: {self.resolve_mapping_url}")
-        logger.info(f" GetScoped URL: {self.get_scoped_url}")
+        logger.info(f"PiperClient initialized for agent client_id '{self.client_id[:8]}...'.")
+        # Optionally attempt discovery on init
+        if auto_discover_instance_id:
+             self.discover_local_instance_id() # Attempt discovery, result cached internally
 
-
-    def set_active_user(self, user_id: str):
+    # --- Instance ID Discovery ---
+    def discover_local_instance_id(self, force_refresh: bool = False) -> Optional[str]:
         """
-        Sets the active Piper User ID context for subsequent calls made by this client instance.
+        Attempts to query the local Piper Link service for the active instanceId.
+        Caches the result in memory for this client instance.
 
         Args:
-            user_id: The Piper User ID string.
-        """
-        if not user_id or not isinstance(user_id, str):
-            raise ValueError("user_id must be a non-empty string.")
-        logger.info(f"Setting active user context for SDK instance: {user_id}")
-        self._active_user_id = user_id
+            force_refresh: If True, ignore cached value and query again.
 
-    def _fetch_agent_token(self, audience: str, user_id_context: Optional[str]) -> Tuple[str, float]:
+        Returns:
+            The discovered instanceId string, or None if not found/error.
+            The discovered ID is also cached internally for subsequent calls.
         """
-        Internal: Fetches a new agent access token for a specific audience and user context
-        using client_credentials grant. Passes user_id_context if provided.
-        Returns (access_token, expiry_timestamp). Raises PiperAuthError on failure.
+        if self._discovered_instance_id and not force_refresh:
+             logger.debug(f"Using cached instanceId: {self._discovered_instance_id}")
+             return self._discovered_instance_id
+
+        logger.info(f"Attempting to discover Piper Link instanceId from: {self.piper_link_service_url}")
+        try:
+            # Use the session for consistency, short timeout for local calls
+            response = self._session.get(self.piper_link_service_url, timeout=1.0)
+            response.raise_for_status() # Raises HTTPError for 4xx/5xx
+            data = response.json()
+            # Expecting {"instanceId": "...", "userId": "..."} potentially
+            instance_id = data.get("instanceId")
+            if instance_id and isinstance(instance_id, str):
+                logger.info(f"Discovered and cached active Piper Link instanceId: {instance_id}")
+                self._discovered_instance_id = instance_id
+                return instance_id
+            else:
+                logger.warning(f"Local Piper Link service at {self.piper_link_service_url} responded but instanceId was missing or invalid in JSON: {data}")
+                self._discovered_instance_id = None # Cache failure
+                return None
+        except requests.exceptions.ConnectionError:
+            logger.warning(f"Local Piper Link service not found or not running at {self.piper_link_service_url}.")
+            self._discovered_instance_id = None
+            return None
+        except requests.exceptions.Timeout:
+            logger.warning(f"Timeout connecting to local Piper Link service at {self.piper_link_service_url}.")
+            self._discovered_instance_id = None
+            return None
+        except requests.exceptions.RequestException as e:
+            # Includes JSONDecodeError, HTTPError etc.
+            status_code = e.response.status_code if e.response is not None else None
+            logger.warning(f"Error querying local Piper Link service at {self.piper_link_service_url} (Status: {status_code}): {e}")
+            self._discovered_instance_id = None
+            return None
+        except Exception as e: # Catch any other unexpected errors
+             logger.error(f"Unexpected error discovering local Piper Link instanceId: {e}", exc_info=True)
+             self._discovered_instance_id = None
+             return None
+
+    # --- Internal Token Fetching (Modified) ---
+    def _fetch_agent_token(self, audience: str, instance_id: Optional[str]) -> Tuple[str, float]:
         """
-        user_ctx_log = f"user_id_context: {user_id_context}" if user_id_context else "Default (no user context)"
-        logger.info(f"Requesting new agent token via client_credentials for audience: {audience}, {user_ctx_log}")
+        Internal: Fetches token using client_credentials grant.
+        Passes piper_link_instance_id if provided. Determines sub claim on backend.
+        """
+        instance_ctx_log = f"instance_id: {instance_id}" if instance_id else "no instance context (will default to agent owner)"
+        logger.info(f"Requesting agent token via client_credentials for audience: {audience}, {instance_ctx_log}")
         headers = {'Content-Type': 'application/x-www-form-urlencoded'}
         data_dict = {
             'grant_type': 'client_credentials',
-            'client_id': self.client_id,
-            'client_secret': self._client_secret,
-            # 'scope': 'secret:read', # Scope might not be needed/used by client_credentials
-            'audience': audience, # Specify the audience we need the token FOR
+            'client_id': self.client_id, # This agent's ID
+            'client_secret': self._client_secret, # This agent's secret
+            'audience': audience
         }
-        # *** ADD user_id_context if provided ***
-        if user_id_context:
-            data_dict['user_id_context'] = user_id_context
+        # *** ADD piper_link_instance_id if discovered/provided ***
+        if instance_id:
+            data_dict['piper_link_instance_id'] = instance_id
         else:
-             # If no user_id is provided, the token endpoint might default
-             # the 'sub' to the agent's own ID or reject the request if
-             # user context is mandatory for the target audience.
-             # This depends on the /token endpoint implementation.
-             logger.warning(f"Requesting agent token without user_id_context for audience {audience}. Behavior depends on /token endpoint.")
-
+            # This case means the SDK couldn't discover the instance ID, and the caller
+            # didn't provide one. The /token endpoint will default the 'sub' claim
+            # to the agent's owner ID. This might be okay for some agents, but often
+            # the agent needs to act as the end-user linked via the instanceId.
+             logger.warning(f"Requesting agent token without piper_link_instance_id for audience {audience}. Token 'sub' claim will default to agent owner ID. This may lead to permission errors if user context is required.")
 
         data_encoded = urlencode(data_dict)
+        request_start_time = time.time()
 
         try:
-            response = self._session.post(self.token_url, headers=headers, data=data_encoded, timeout=10)
+            response = self._session.post(self.token_url, headers=headers, data=data_encoded, timeout=15) # Slightly longer timeout?
 
-            # Standardize error parsing based on backend convention
-            # Assuming backend consistently returns JSON: {"error": "...", "error_description": "..."}
-            if 400 <= response.status_code < 600: # Handle 4xx and 5xx
-                error_details: Any = None
-                error_code: str = f'http_{response.status_code}' # Default error code
-                error_description: str = f"API Error {response.status_code}"
+            # Standardize error parsing (assuming backend consistently returns JSON)
+            if 400 <= response.status_code < 600:
+                error_details: Any = None; error_code: str = f'http_{response.status_code}'; error_description: str = f"API Error {response.status_code}"
                 try:
                     error_details = response.json()
                     error_code = error_details.get('error', error_code)
-                    # Look for description or message, fallback to raw dict/text
                     error_description = error_details.get('error_description', error_details.get('message', str(error_details)))
                 except requests.exceptions.JSONDecodeError:
-                    error_details = response.text # Fallback to text if not JSON
-                    error_description = error_details if error_details else error_description
+                    error_details = response.text; error_description = error_details if error_details else error_description
 
-                log_ctx = f"user {user_id_context}" if user_id_context else "no user"
+                log_ctx = f"instance {instance_id}" if instance_id else "no instance"
                 logger.error(f"Failed to obtain agent token for audience {audience}, {log_ctx}. Status: {response.status_code}, Code: {error_code}, Details: {error_details}")
-
+                # Add specific error code handling if needed (e.g., invalid_client, invalid_request for bad instanceId)
                 raise PiperAuthError(f"API error obtaining agent token: {error_description}", status_code=response.status_code, error_code=error_code, error_details=error_details)
 
-            # If status code is 2xx, proceed
             token_data = response.json()
             access_token = token_data.get('access_token')
-            # expires_in should be a number, but handle potential string
             expires_in_raw = token_data.get('expires_in', 0)
-            try:
-                expires_in = int(expires_in_raw)
-            except (ValueError, TypeError):
-                logger.warning(f"Invalid 'expires_in' value received: {expires_in_raw}. Defaulting to 0.")
-                expires_in = 0
+            try: expires_in = int(expires_in_raw)
+            except (ValueError, TypeError): expires_in = 0
 
             if not access_token:
-                logger.error(f"No access token found in successful response from {self.token_url}. Response: {token_data}")
-                raise PiperAuthError("Failed to obtain access token (token missing in response).", status_code=response.status_code, error_details=token_data)
+                 raise PiperAuthError("Failed to obtain access token (token missing in response).", status_code=response.status_code, error_details=token_data)
 
-            expiry_timestamp = time.time() + expires_in
-            log_ctx = f"user {user_id_context}" if user_id_context else "no user"
-            logger.info(f"Successfully obtained new agent token for audience {audience}, {log_ctx} (expires ~{time.ctime(expiry_timestamp)}).")
+            expiry_timestamp = request_start_time + expires_in
+            log_ctx = f"instance {instance_id}" if instance_id else "no instance"
+            logger.info(f"Successfully obtained agent token for audience {audience}, {log_ctx} (expires ~{time.ctime(expiry_timestamp)}).")
             return access_token, expiry_timestamp
 
         except requests.exceptions.RequestException as e:
-            status_code = e.response.status_code if e.response is not None else None
-            log_ctx = f"user {user_id_context}" if user_id_context else "no user"
+            # ... (Network error handling as before, add context) ...
+            status_code = e.response.status_code if e.response is not None else None; error_details = None
+            if e.response is not None: try: error_details = e.response.json()
+            except requests.exceptions.JSONDecodeError: error_details = e.response.text
+            log_ctx = f"instance {instance_id}" if instance_id else "no instance"
             logger.error(f"Network/Request error getting agent token from {self.token_url} for {log_ctx}. Status: {status_code}", exc_info=True)
-            # Try to get details from response if available
-            error_details = None
-            if e.response is not None:
-                try: error_details = e.response.json()
-                except requests.exceptions.JSONDecodeError: error_details = e.response.text
             raise PiperAuthError(f"Request failed for agent token: {e}", status_code=status_code, error_details=error_details) from e
-        except Exception as e: # Catch unexpected SDK-side errors
-            log_ctx = f"user {user_id_context}" if user_id_context else "no user"
-            logger.error(f"Unexpected error during agent token fetch for {log_ctx}: {e}", exc_info=True)
-            raise PiperAuthError(f"An unexpected error occurred fetching agent token: {e}") from e
+        except Exception as e:
+             # ... (Unexpected SDK error handling as before, add context) ...
+             log_ctx = f"instance {instance_id}" if instance_id else "no instance"
+             logger.error(f"Unexpected error during agent token fetch for {log_ctx}: {e}", exc_info=True)
+             raise PiperAuthError(f"An unexpected error occurred fetching agent token: {e}") from e
 
-
-    def _get_valid_agent_token(self, audience: str, user_id_context: Optional[str], force_refresh: bool = False) -> str:
+    def _get_valid_agent_token(self, audience: str, instance_id: Optional[str], force_refresh: bool = False) -> str:
         """
-        Internal: Gets a valid agent access token for a specific audience and user context.
-        Uses (audience, user_id_context) as the cache key.
+        Internal: Gets token for specific audience and instanceId context.
+        Cache key is (audience, instance_id).
         """
-        cache_key = (audience, user_id_context)
+        # *** MODIFIED: Use instance_id for caching and fetching ***
+        cache_key = (audience, instance_id)
         now = time.time()
         cached_token = self._access_tokens.get(cache_key)
         cached_expiry = self._token_expiries.get(cache_key, 0)
 
-        # Check cache validity
         if not force_refresh and cached_token and cached_expiry > (now + self.DEFAULT_TOKEN_EXPIRY_BUFFER_SECONDS):
-            log_ctx = f"user_context: {user_id_context}" if user_id_context else "no user context"
+            log_ctx = f"instance_id: {instance_id}" if instance_id else "no instance context"
             logger.debug(f"Using cached agent token for audience: {audience}, {log_ctx}")
             return cached_token
         else:
             if cached_token and not force_refresh:
-                log_ctx = f"user_context: {user_id_context}" if user_id_context else "no user context"
-                logger.info(f"Agent token for audience {audience}, {log_ctx} expired or nearing expiry, refreshing.")
+                 log_ctx = f"instance_id: {instance_id}" if instance_id else "no instance context"
+                 logger.info(f"Agent token for audience {audience}, {log_ctx} expired or nearing expiry, refreshing.")
 
-            # Fetch new token for the specific audience and user context
             access_token, expiry_timestamp = self._fetch_agent_token(
                 audience=audience,
-                user_id_context=user_id_context
+                instance_id=instance_id # Pass instance_id to fetch
             ) # Raises PiperAuthError on failure
 
-            # Update cache using the tuple key
             self._access_tokens[cache_key] = access_token
             self._token_expiries[cache_key] = expiry_timestamp
             return access_token
 
+    # --- Public Methods (Modified) ---
 
-    def get_credential_id_for_variable(self, variable_name: str, user_id: Optional[str] = None) -> str:
+    def _get_instance_id_or_raise(self, instance_id_param: Optional[str]) -> str:
+        """Internal helper to get instance ID, trying discovery if needed."""
+        target_instance_id = instance_id_param or self._discovered_instance_id or self.discover_local_instance_id()
+        if not target_instance_id:
+            # If discovery failed or wasn't attempted and no ID was passed, raise specific error.
+            raise PiperLinkNeededError() # Use the specific error type
+        return target_instance_id
+
+    def get_credential_id_for_variable(self, variable_name: str, instance_id: Optional[str] = None) -> str:
         """
-        Resolves an agent's internal variable name to the specific Piper credential ID
-        granted by the specified user (or the active user set via set_active_user).
+        Resolves variable name using the context from the provided or discovered instanceId.
 
         Args:
-            variable_name: The logical variable name defined by the agent (e.g., "GMAIL_API_KEY").
-            user_id: (Optional) The Piper User ID whose grant mapping should be resolved.
-                     If None, uses the user ID set via set_active_user().
+            variable_name: The logical variable name defined by the agent.
+            instance_id: (Optional) The Piper Link instanceId to use for context.
+                         If None, attempts discovery via discover_local_instance_id().
 
         Returns:
-            The Piper credential ID (Bubble unique ID of the Piper - Secret) string.
+            The Piper credential ID string.
 
         Raises:
-            PiperConfigError: If user_id is None and no active user has been set.
-            PiperAuthError: If authentication fails, the mapping is not found (404),
-                          or the API returns an unexpected error.
-            ValueError: If variable_name is empty.
+            PiperLinkNeededError: If instanceId is needed but cannot be found/discovered.
+            PiperAuthError: For API authentication/authorization errors.
+            ValueError: For invalid input.
         """
-        active_user = user_id or self._active_user_id
-        if not active_user:
-            raise PiperConfigError("User ID context not set. Call set_active_user() or pass user_id.")
-        if not variable_name or not isinstance(variable_name, str):
-            raise ValueError("variable_name must be a non-empty string.")
+        target_instance_id = self._get_instance_id_or_raise(instance_id) # Get ID or raise
+        if not variable_name or not isinstance(variable_name, str): raise ValueError("variable_name must be non-empty string.")
         trimmed_variable_name = variable_name.strip()
-        if not trimmed_variable_name:
-             raise ValueError("variable_name cannot be empty or just whitespace.")
+        if not trimmed_variable_name: raise ValueError("variable_name cannot be empty.")
 
         try:
-            # Get an agent token specifically for the resolve mapping endpoint and user context
             target_audience = self.resolve_mapping_url
-            agent_token = self._get_valid_agent_token(audience=target_audience, user_id_context=active_user)
+            agent_token = self._get_valid_agent_token(audience=target_audience, instance_id=target_instance_id)
 
-            headers = {
-                'Authorization': f'Bearer {agent_token}',
-                'Content-Type': 'application/json'
-            }
+            headers = {'Authorization': f'Bearer {agent_token}', 'Content-Type': 'application/json'}
             payload = {'variableName': trimmed_variable_name}
 
-            logger.info(f"Calling resolve_variable_mapping for variable: '{trimmed_variable_name}', user: {active_user}")
-            response = self._session.post(self.resolve_mapping_url, headers=headers, json=payload, timeout=10)
+            logger.info(f"Calling resolve_variable_mapping for variable: '{trimmed_variable_name}', instance: {target_instance_id}")
+            response = self._session.post(self.resolve_mapping_url, headers=headers, json=payload, timeout=12) # Slightly longer?
 
-            # Standardize error parsing (assuming backend now uses JSON errors)
+            # --- More specific error handling based on backend JSON ---
             if 400 <= response.status_code < 600:
-                error_details: Any = None
-                error_code: str = f'http_{response.status_code}'
-                error_description: str = f"API Error {response.status_code}"
-                try:
-                    error_details = response.json()
-                    error_code = error_details.get('error', error_code)
-                    error_description = error_details.get('error_description', error_details.get('message', str(error_details)))
-                except requests.exceptions.JSONDecodeError:
-                    error_details = response.text
-                    error_description = error_details if error_details else error_description
-
-                logger.error(f"API error resolving mapping for var '{trimmed_variable_name}', user {active_user}. Status: {response.status_code}, Code: {error_code}, Details: {error_details}")
-
-                # Invalidate token cache only on explicit auth failure
-                if response.status_code == 401 or error_code == 'invalid_token':
-                    logger.warning(f"Received 401/invalid_token from resolve_variable_mapping for user {active_user}. Forcing token refresh.")
-                    self._token_expiries[(target_audience, active_user)] = 0 # Invalidate specific token
-
-                # Specific handling for mapping not found
-                if response.status_code == 404 or error_code == 'mapping_not_found':
-                    logger.warning(f"Mapping not found for variable '{trimmed_variable_name}', user '{active_user}'. Check grants.")
-                    raise PiperAuthError(f"No active grant mapping found for variable '{trimmed_variable_name}' for user '{active_user}'.", status_code=response.status_code or 404, error_code='mapping_not_found', error_details=error_details)
-
+                error_details: Any = None; error_code: str = f'http_{response.status_code}'; error_description: str = f"API Error {response.status_code}"
+                try: error_details = response.json(); error_code = error_details.get('error', error_code); error_description = error_details.get('error_description', error_details.get('message', str(error_details)))
+                except requests.exceptions.JSONDecodeError: error_details = response.text; error_description = error_details if error_details else error_description
+                logger.error(f"API error resolving mapping for var '{trimmed_variable_name}', instance {target_instance_id}. Status: {response.status_code}, Code: {error_code}, Details: {error_details}")
+                if response.status_code == 401 or error_code == 'invalid_token': self._token_expiries[(target_audience, target_instance_id)] = 0 # Expire token
+                if response.status_code == 404 or error_code == 'mapping_not_found': raise PiperAuthError(f"No active grant mapping found for variable '{trimmed_variable_name}' for context of instance '{target_instance_id}'.", status_code=404, error_code='mapping_not_found', error_details=error_details)
                 raise PiperAuthError(f"Failed to resolve variable mapping: {error_description}", status_code=response.status_code, error_code=error_code, error_details=error_details)
-
+            # --- End specific error handling ---
 
             mapping_data = response.json()
             credential_id = mapping_data.get('credentialId')
-
             if not credential_id or not isinstance(credential_id, str):
-                logger.error(f"Invalid response from resolve_variable_mapping: missing or invalid 'credentialId'. Response: {mapping_data}")
-                raise PiperAuthError("Received unexpected response format from variable mapping endpoint.", status_code=response.status_code, error_details=mapping_data)
+                raise PiperAuthError("Received unexpected response format from variable mapping endpoint (missing credentialId).", status_code=response.status_code, error_details=mapping_data)
 
-            logger.info(f"Successfully resolved variable '{trimmed_variable_name}' for user '{active_user}' to credentialId '{credential_id}'.")
+            logger.info(f"Successfully resolved variable '{trimmed_variable_name}' for instance '{target_instance_id}' to credentialId '{credential_id}'.")
             return credential_id
 
-        except PiperAuthError: # Re-raise specific auth/API errors
-            raise
-        except ValueError: # Re-raise validation errors
-            raise
-        except requests.exceptions.RequestException as e: # Wrap network errors
-            status_code = e.response.status_code if e.response is not None else None
-            logger.error(f"Network/Request error calling {self.resolve_mapping_url} for user {active_user}. Status: {status_code}", exc_info=True)
-            error_details = None
-            if e.response is not None:
-                try: error_details = e.response.json()
-                except requests.exceptions.JSONDecodeError: error_details = e.response.text
-            raise PiperAuthError(f"Failed to resolve variable mapping due to network or server error: {e}", status_code=status_code, error_details=error_details) from e
-        except Exception as e: # Catch any other unexpected SDK errors
-            logger.error(f"Unexpected error during resolve_variable_mapping for user {active_user}: {e}", exc_info=True)
-            raise PiperAuthError(f"An unexpected error occurred resolving variable mapping: {e}") from e
+        # Catch specific exceptions first
+        except (PiperAuthError, PiperLinkNeededError, ValueError): raise
+        # Wrap network errors
+        except requests.exceptions.RequestException as e:
+            status_code = e.response.status_code if e.response is not None else None; error_details = None
+            if e.response is not None: try: error_details = e.response.json()
+            except requests.exceptions.JSONDecodeError: error_details = e.response.text
+            logger.error(f"Network error calling {self.resolve_mapping_url} for instance {target_instance_id}. Status: {status_code}", exc_info=True)
+            raise PiperAuthError(f"Network error resolving variable mapping: {e}", status_code=status_code, error_details=error_details) from e
+        # Wrap other unexpected errors
+        except Exception as e:
+             logger.error(f"Unexpected error during resolve_variable_mapping for instance {target_instance_id}: {e}", exc_info=True)
+             raise PiperError(f"An unexpected error occurred resolving variable mapping: {e}") from e
 
 
-    def get_scoped_credentials_by_id(self, credential_ids: List[str], user_id: Optional[str] = None) -> Dict[str, Any]:
+    def get_scoped_credentials_by_id(self, credential_ids: List[str], instance_id: Optional[str] = None) -> Dict[str, Any]:
         """
-        Retrieves short-lived GCP STS credentials for the specified credential IDs,
-        authorized for the given user context (specified or active).
+        Retrieves STS credentials using the context from the provided or discovered instanceId.
 
         Args:
-            credential_ids: A list of Piper credential ID strings (Bubble unique IDs).
-            user_id: (Optional) The Piper User ID context for which the grants are checked.
-                     If None, uses the user ID set via set_active_user().
+            credential_ids: A list of Piper credential ID strings.
+            instance_id: (Optional) The Piper Link instanceId to use for context.
+                         If None, attempts discovery via discover_local_instance_id().
 
         Returns:
-            A dictionary containing the STS token response. Includes 'access_token' (STS),
-            'expires_in', 'token_type', 'granted_credential_ids'.
+            A dictionary containing the STS token response.
 
         Raises:
-            PiperConfigError: If user_id is None and no active user has been set.
-            PiperAuthError: If authentication fails or Piper API returns an error (4xx/5xx).
-            ValueError: If credential_ids is invalid.
+            PiperLinkNeededError: If instanceId is needed but cannot be found/discovered.
+            PiperAuthError: For API authentication/authorization errors.
+            ValueError: For invalid input.
         """
-        active_user = user_id or self._active_user_id
-        if not active_user:
-             raise PiperConfigError("User ID context not set. Call set_active_user() or pass user_id.")
-        if not credential_ids or not isinstance(credential_ids, list) or not all(isinstance(cid, str) and cid for cid in credential_ids):
-            raise ValueError("credential_ids must be a non-empty list of non-empty strings.")
-
+        target_instance_id = self._get_instance_id_or_raise(instance_id) # Get ID or raise
+        if not credential_ids or not isinstance(credential_ids, list): raise ValueError("credential_ids must be a non-empty list.")
         cleaned_credential_ids = [str(cid).strip() for cid in credential_ids if str(cid).strip()]
-        if not cleaned_credential_ids:
-            raise ValueError("credential_ids list is empty after cleaning.")
+        if not cleaned_credential_ids: raise ValueError("credential_ids list contains only empty strings.")
 
         try:
-            # Get an agent token specifically for the get-scoped-credentials endpoint and user context
             target_audience = self.get_scoped_url
-            agent_token = self._get_valid_agent_token(audience=target_audience, user_id_context=active_user)
+            agent_token = self._get_valid_agent_token(audience=target_audience, instance_id=target_instance_id)
 
-            scoped_headers = {
-                'Authorization': f'Bearer {agent_token}',
-                'Content-Type': 'application/json'
-            }
+            scoped_headers = {'Authorization': f'Bearer {agent_token}', 'Content-Type': 'application/json'}
             scoped_payload = {'credentialIds': cleaned_credential_ids}
 
-            logger.info(f"Calling get_scoped_credentials for IDs: {scoped_payload['credentialIds']}, user: {active_user}")
+            logger.info(f"Calling get_scoped_credentials for IDs: {scoped_payload['credentialIds']}, instance: {target_instance_id}")
             response = self._session.post(self.get_scoped_url, headers=scoped_headers, json=scoped_payload, timeout=15)
 
-            # Standardize error parsing (assuming backend now uses JSON errors)
+            # --- More specific error handling based on backend JSON ---
             if 400 <= response.status_code < 600:
-                error_details: Any = None
-                error_code: str = f'http_{response.status_code}'
-                error_description: str = f"API Error {response.status_code}"
-                try:
-                    error_details = response.json()
-                    error_code = error_details.get('error', error_code)
-                    error_description = error_details.get('error_description', error_details.get('message', str(error_details)))
-                except requests.exceptions.JSONDecodeError:
-                    error_details = response.text
-                    error_description = error_details if error_details else error_description
-
-                logger.error(f"API error getting scoped credentials for user {active_user}. Status: {response.status_code}, Code: {error_code}, Details: {error_details}")
-
-                # Invalidate token cache only on explicit auth failure
-                if response.status_code == 401 or error_code == 'invalid_token':
-                    logger.warning(f"Received 401/invalid_token from get_scoped_credentials for user {active_user}. Forcing token refresh.")
-                    self._token_expiries[(target_audience, active_user)] = 0 # Force refresh
-                    raise PiperAuthError(f"Agent authentication failed: {error_description}", status_code=401, error_code=error_code or 'invalid_token', error_details=error_details)
-                elif response.status_code == 403 or error_code == 'permission_denied':
-                    logger.warning(f"Received 403/permission_denied from get_scoped_credentials for user {active_user}. Check grants. Details: {error_details}")
-                    raise PiperAuthError(f"Permission denied: {error_description}", status_code=403, error_code=error_code or 'permission_denied', error_details=error_details)
-                else: # Other 4xx/5xx
-                    raise PiperAuthError(f"Failed to get scoped credentials: {error_description}", status_code=response.status_code, error_code=error_code, error_details=error_details)
-
+                error_details: Any = None; error_code: str = f'http_{response.status_code}'; error_description: str = f"API Error {response.status_code}"
+                try: error_details = response.json(); error_code = error_details.get('error', error_code); error_description = error_details.get('error_description', error_details.get('message', str(error_details)))
+                except requests.exceptions.JSONDecodeError: error_details = response.text; error_description = error_details if error_details else error_description
+                logger.error(f"API error getting scoped credentials for instance {target_instance_id}. Status: {response.status_code}, Code: {error_code}, Details: {error_details}")
+                if response.status_code == 401 or error_code == 'invalid_token': self._token_expiries[(target_audience, target_instance_id)] = 0; raise PiperAuthError(f"Agent authentication failed getting scoped credentials: {error_description}", status_code=401, error_code=error_code or 'invalid_token', error_details=error_details)
+                if response.status_code == 403 or error_code == 'permission_denied': raise PiperAuthError(f"Permission denied getting scoped credentials: {error_description}", status_code=403, error_code=error_code or 'permission_denied', error_details=error_details)
+                raise PiperAuthError(f"Failed to get scoped credentials: {error_description}", status_code=response.status_code, error_code=error_code, error_details=error_details)
+            # --- End specific error handling ---
 
             scoped_data = response.json()
-            # Basic validation of success response structure
             if 'access_token' not in scoped_data or 'granted_credential_ids' not in scoped_data:
-                logger.warning(f"Get scoped credentials response missing expected fields for user {active_user}: {scoped_data}")
-                raise PiperAuthError("Received unexpected response format from get_scoped_credentials.", status_code=response.status_code, error_details=scoped_data)
+                 raise PiperAuthError("Received unexpected response format from get_scoped_credentials.", status_code=response.status_code, error_details=scoped_data)
 
-            # Log potential partial success
-            requested_set = set(cleaned_credential_ids)
-            granted_set = set(scoped_data.get('granted_credential_ids', []))
-            if requested_set != granted_set:
-                missing_ids = requested_set - granted_set
-                logger.warning(f"Partial success getting credentials for user {active_user}: Granted for {list(granted_set)}, but requested IDs {list(missing_ids)} were not granted (likely no active grant).")
+            requested_set = set(cleaned_credential_ids); granted_set = set(scoped_data.get('granted_credential_ids', []))
+            if requested_set != granted_set: logger.warning(f"Partial success getting credentials for instance {target_instance_id}: Granted for {list(granted_set)}, but not for {list(requested_set - granted_set)}.")
 
-            logger.info(f"Successfully received scoped credentials response for user {active_user}, granted IDs: {scoped_data.get('granted_credential_ids')}")
+            logger.info(f"Successfully received scoped credentials for instance {target_instance_id}, granted IDs: {scoped_data.get('granted_credential_ids')}")
             return scoped_data
 
-        except PiperAuthError: # Re-raise specific errors
-            raise
-        except ValueError: # Re-raise validation errors
-            raise
-        except requests.exceptions.RequestException as e: # Wrap network/5xx errors
-            status_code = e.response.status_code if e.response is not None else None
-            logger.error(f"Network/Request error calling {self.get_scoped_url} for user {active_user}. Status: {status_code}", exc_info=True)
-            error_details = None
-            if e.response is not None:
-                try: error_details = e.response.json()
-                except requests.exceptions.JSONDecodeError: error_details = e.response.text
-            raise PiperAuthError(f"Failed to get scoped credentials due to network or server error: {e}", status_code=status_code, error_details=error_details) from e
-        except Exception as e: # Catch any other unexpected SDK errors
-            logger.error(f"Unexpected error during get_scoped_credentials for user {active_user}: {e}", exc_info=True)
-            raise PiperAuthError(f"An unexpected error occurred getting scoped credentials: {e}") from e
+        # Catch specific exceptions first
+        except (PiperAuthError, PiperLinkNeededError, ValueError): raise
+        # Wrap network errors
+        except requests.exceptions.RequestException as e:
+            status_code = e.response.status_code if e.response is not None else None; error_details = None
+            if e.response is not None: try: error_details = e.response.json()
+            except requests.exceptions.JSONDecodeError: error_details = e.response.text
+            logger.error(f"Network error calling {self.get_scoped_url} for instance {target_instance_id}. Status: {status_code}", exc_info=True)
+            raise PiperAuthError(f"Network error getting scoped credentials: {e}", status_code=status_code, error_details=error_details) from e
+        # Wrap other unexpected errors
+        except Exception as e:
+             logger.error(f"Unexpected error during get_scoped_credentials for instance {target_instance_id}: {e}", exc_info=True)
+             raise PiperError(f"An unexpected error occurred getting scoped credentials: {e}") from e
 
 
-    def get_scoped_credentials_for_variable(self, variable_name: str, user_id: Optional[str] = None) -> Dict[str, Any]:
-        """
-        Retrieves short-lived GCP STS credentials for the credential mapped
-        to the given agent variable name by the specified user (or active user).
+    def get_scoped_credentials_for_variable(self, variable_name: str, instance_id: Optional[str] = None) -> Dict[str, Any]:
+         """
+         Retrieves short-lived GCP STS credentials for the variable name, using context
+         from the provided or discovered instanceId.
 
-        This is a convenience method that first resolves the variable name
-        to a credential ID and then fetches the scoped credentials for that ID,
-        using the appropriate user context throughout.
+         This is the primary convenience method. It attempts to discover the local
+         Piper Link instanceId if not provided.
 
-        Args:
-            variable_name: The logical variable name defined by the agent (e.g., "GMAIL_API_KEY").
-            user_id: (Optional) The Piper User ID context. If None, uses the ID
-                     set via set_active_user().
+         Args:
+            variable_name: The logical variable name defined by the agent.
+            instance_id: (Optional) The Piper Link instanceId to use for context.
 
-        Returns:
-            A dictionary containing the STS token response from Piper.
+         Returns:
+             A dictionary containing the STS token response from Piper.
 
-        Raises:
-            PiperConfigError: If user_id context cannot be determined.
-            PiperAuthError: If authentication fails, the variable mapping is not found,
-                          no active grant exists, or the API returns an error.
-            ValueError: If variable_name is empty.
-        """
-        active_user = user_id or self._active_user_id
-        if not active_user:
-             raise PiperConfigError("User ID context not set. Call set_active_user() or pass user_id.")
-        # variable_name validation happens in get_credential_id_for_variable
+         Raises:
+            PiperLinkNeededError: If instanceId is needed but cannot be found/discovered.
+            PiperAuthError: For API authentication/authorization errors.
+            ValueError: For invalid input.
+         """
+         # Discover or validate instanceId first (will raise PiperLinkNeededError if needed)
+         target_instance_id = self._get_instance_id_or_raise(instance_id)
 
-        logger.info(f"Attempting to get scoped credentials for variable: '{variable_name}', user: {active_user}")
-        try:
-            # Step 1: Resolve variable name to credential ID (passing user_id)
-            # This call already ensures active_user is not None
-            credential_id = self.get_credential_id_for_variable(
-                variable_name=variable_name,
-                user_id=active_user # Pass resolved context explicitly
-            )
+         logger.info(f"Attempting to get scoped credentials for variable: '{variable_name}', instance: {target_instance_id}")
+         # If we reach here, target_instance_id is valid
 
-            # Step 2: Get scoped credentials using the resolved ID (passing user_id)
-            return self.get_scoped_credentials_by_id(
-                credential_ids=[credential_id],
-                user_id=active_user # Pass resolved context explicitly
-            )
+         # Step 1: Resolve variable (will use target_instance_id implicitly via token fetch)
+         # Pass target_instance_id explicitly to avoid redundant discovery
+         credential_id = self.get_credential_id_for_variable(
+             variable_name=variable_name,
+             instance_id=target_instance_id
+         )
+         # Step 2: Get credentials (will use target_instance_id implicitly via token fetch)
+         # Pass target_instance_id explicitly to avoid redundant discovery
+         return self.get_scoped_credentials_by_id(
+             credential_ids=[credential_id],
+             instance_id=target_instance_id
+         )
 
-        except (PiperAuthError, PiperConfigError, ValueError) as e:
-            # Log the specific error originating from the underlying calls
-            logger.error(f"Failed to get scoped credentials for variable '{variable_name}', user '{active_user}': {e}")
-            # Re-raise the specific error from the underlying call
-            raise e
-        except Exception as e: # Catch unexpected errors during orchestration
-            logger.error(f"Unexpected error getting credentials for variable '{variable_name}', user '{active_user}': {e}", exc_info=True)
-            # Wrap in PiperError for consistency
-            raise PiperError(f"An unexpected error occurred retrieving credentials for variable: {e}") from e
-
-    # --- Placeholder for future User Auth methods (Not Implemented) ---
-    # def initiate_user_authorization(...) -> str: raise NotImplementedError("User authorization flow not implemented.")
-    # def handle_authorization_callback(...) -> Dict[str, Any]: raise NotImplementedError("User authorization flow not implemented.")
+    # --- Placeholder for User Auth flows (like the one Piper Link app uses) ---
+    # These methods would likely live in a separate helper class or module,
+    # or potentially be static methods if they don't rely on agent client_id/secret.
+    # They would handle the browser opening, code exchange etc for the *linking* process.
+    # def initiate_piper_link_flow(...)
+    # def complete_piper_link_flow(...)
