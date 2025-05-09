@@ -234,7 +234,8 @@ class PiperClient:
         except requests.exceptions.RequestException as e:
             # ... (Network error handling as before, add context) ...
             status_code = e.response.status_code if e.response is not None else None; error_details = None
-            if e.response is not None: try: error_details = e.response.json()
+            if e.response is not None: 
+                try: error_details = e.response.json()
             except requests.exceptions.JSONDecodeError: error_details = e.response.text
             log_ctx = f"instance {instance_id}" if instance_id else "no instance"
             logger.error(f"Network/Request error getting agent token from {self.token_url} for {log_ctx}. Status: {status_code}", exc_info=True)
@@ -340,7 +341,8 @@ class PiperClient:
         # Wrap network errors
         except requests.exceptions.RequestException as e:
             status_code = e.response.status_code if e.response is not None else None; error_details = None
-            if e.response is not None: try: error_details = e.response.json()
+            if e.response is not None: 
+                try: error_details = e.response.json()
             except requests.exceptions.JSONDecodeError: error_details = e.response.text
             logger.error(f"Network error calling {self.resolve_mapping_url} for instance {target_instance_id}. Status: {status_code}", exc_info=True)
             raise PiperAuthError(f"Network error resolving variable mapping: {e}", status_code=status_code, error_details=error_details) from e
@@ -408,7 +410,8 @@ class PiperClient:
         # Wrap network errors
         except requests.exceptions.RequestException as e:
             status_code = e.response.status_code if e.response is not None else None; error_details = None
-            if e.response is not None: try: error_details = e.response.json()
+            if e.response is not None: 
+                try: error_details = e.response.json()
             except requests.exceptions.JSONDecodeError: error_details = e.response.text
             logger.error(f"Network error calling {self.get_scoped_url} for instance {target_instance_id}. Status: {status_code}", exc_info=True)
             raise PiperAuthError(f"Network error getting scoped credentials: {e}", status_code=status_code, error_details=error_details) from e
