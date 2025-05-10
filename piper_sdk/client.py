@@ -1,13 +1,13 @@
 # piper_sdk/client.py
 
 import os
-import re
+import re # For variable name normalization
 import requests
 import time
 from urllib.parse import urlencode
 import logging
 from typing import List, Dict, Any, Optional, Tuple
-import uuid
+import uuid # For potential future use by SDK if it were to manage instanceId itself
 
 # Logging setup
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - PiperSDK - %(levelname)s - %(message)s')
@@ -38,20 +38,29 @@ class PiperLinkNeededError(PiperConfigError):
 
 class PiperClient:
     DEFAULT_TOKEN_EXPIRY_BUFFER_SECONDS: int = 60
-    DEFAULT_PROJECT_ID: str = "444535882337"
-    DEFAULT_REGION: str = "us-central1"
-    TOKEN_URL_TEMPLATE = "https://piper-token-endpoint-{project_id}.{region}.run.app"
-    GET_SCOPED_URL_TEMPLATE = "https://getscopedgcpcredentials-{project_id}.{region}.run.app"
-    RESOLVE_MAPPING_URL_TEMPLATE = "https://piper-resolve-variable-mapping-{project_id}.{region}.run.app"
+    DEFAULT_PROJECT_ID: str = "444535882337" # This is for constructing default FULL URLs
+    DEFAULT_REGION: str = "us-central1"     # This is for constructing default FULL URLs
+
+    # --- Default FULL URLs for Piper Production API Endpoints ---
+    # These will be constructed using DEFAULT_PROJECT_ID and DEFAULT_REGION if not overridden
+    DEFAULT_PIPER_TOKEN_URL = f"https://piper-token-endpoint-{DEFAULT_PROJECT_ID}.{DEFAULT_REGION}.run.app"
+    DEFAULT_PIPER_GET_SCOPED_URL = f"https://getscopedgcpcredentials-{DEFAULT_PROJECT_ID}.{DEFAULT_REGION}.run.app"
+    DEFAULT_PIPER_RESOLVE_MAPPING_URL = f"https://piper-resolve-variable-mapping-{DEFAULT_PROJECT_ID}.{DEFAULT_REGION}.run.app"
+    
     DEFAULT_PIPER_LINK_SERVICE_URL = "http://localhost:31477/piper-link-context"
 
-    _discovered_instance_id: Optional[str] = None
+    # --- Instance variable for discovered instanceId ---
+    # self._discovered_instance_id: Optional[str] = None # Initialized in __init__
 
     def __init__(self,
                  client_id: str,
                  client_secret: str,
-                 project_id: Optional[str] = None,
-                 region: Optional[str] = None,
+                 # project_id and region are no longer primary config for SDK users.
+                 # They are used here only if you want to allow overriding the default *construction* of the full URLs
+                 # for a Piper system deployment different from the hardcoded defaults above.
+                 # For most users, these would not be passed.
+                 _piper_system_project_id: Optional[str] = None, # Underscore to indicate advanced/internal use
+                 _piper_system_region: Optional[str] = None,     # Underscore to indicate advanced/internal use
                  token_url: Optional[str] = None,
                  get_scoped_url: Optional[str] = None,
                  resolve_mapping_url: Optional[str] = None,
@@ -66,19 +75,36 @@ class PiperClient:
             raise ValueError("client_id and client_secret are required.")
         self.client_id: str = client_id
         self._client_secret: str = client_secret
-        self.project_id: str = project_id or self.DEFAULT_PROJECT_ID
-        self.region: str = region or self.DEFAULT_REGION
+        
+        # Determine effective project_id and region for URL construction if defaults are used
+        # This allows advanced override of defaults if needed, but primary way is direct URL override
+        effective_project_id = _piper_system_project_id or self.DEFAULT_PROJECT_ID
+        effective_region = _piper_system_region or self.DEFAULT_REGION
 
-        self.token_url: str = token_url or self.TOKEN_URL_TEMPLATE.format(project_id=self.project_id, region=self.region)
-        self.get_scoped_url: str = get_scoped_url or self.GET_SCOPED_URL_TEMPLATE.format(project_id=self.project_id, region=self.region)
-        self.resolve_mapping_url: str = resolve_mapping_url or self.RESOLVE_MAPPING_URL_TEMPLATE.format(project_id=self.project_id, region=self.region)
+        self.token_url: str = token_url or f"https://piper-token-endpoint-{effective_project_id}.{effective_region}.run.app"
+        self.get_scoped_url: str = get_scoped_url or f"https://getscopedgcpcredentials-{effective_project_id}.{effective_region}.run.app"
+        self.resolve_mapping_url: str = resolve_mapping_url or f"https://piper-resolve-variable-mapping-{effective_project_id}.{effective_region}.run.app"
         self.piper_link_service_url: str = piper_link_service_url or self.DEFAULT_PIPER_LINK_SERVICE_URL
+        
+        # Basic URL validation
+        for url_attr_name, url_value_str in [
+            ("Piper Token URL", self.token_url),
+            ("Piper GetScoped URL", self.get_scoped_url),
+            ("Piper Resolve Mapping URL", self.resolve_mapping_url)
+        ]:
+            if not url_value_str or not url_value_str.startswith('https://'):
+                raise PiperConfigError(f"{url_attr_name} ('{url_value_str}') must be a valid HTTPS URL.")
+        if not self.piper_link_service_url or not self.piper_link_service_url.startswith('http://localhost'):
+             logger.warning(f"Piper Link Service URL ('{self.piper_link_service_url}') does not look like a standard localhost URL. Ensure it's correct.")
+
 
         self._session = requests_session if requests_session else requests.Session()
-        sdk_version = "0.2.0" 
+        sdk_version = "0.3.0" # Reflects new features
         self._session.headers.update({'User-Agent': f'Pyper-SDK/{sdk_version}'})
+        
         self._access_tokens: Dict[Tuple[str, Optional[str]], str] = {}
         self._token_expiries: Dict[Tuple[str, Optional[str]], float] = {}
+        self._discovered_instance_id: Optional[str] = None # Initialize as instance variable
 
         self.enable_env_fallback = enable_env_fallback
         self.env_variable_prefix = env_variable_prefix
@@ -121,7 +147,7 @@ class PiperClient:
             return None
 
     def _fetch_agent_token(self, audience: str, instance_id: Optional[str]) -> Tuple[str, float]:
-        instance_ctx_log = f"instance_id: {instance_id}" if instance_id else "no instance context (will default to agent owner)"
+        instance_ctx_log = f"instance_id: {instance_id}" if instance_id else "no instance context (token 'sub' will default to agent owner)"
         logger.info(f"Requesting agent token via client_credentials for audience: {audience}, {instance_ctx_log}")
         headers = {'Content-Type': 'application/x-www-form-urlencoded'}
         data_dict = {
@@ -133,7 +159,7 @@ class PiperClient:
         if instance_id:
             data_dict['piper_link_instance_id'] = instance_id
         else:
-            logger.warning(f"Requesting agent token without piper_link_instance_id for audience {audience}. Token 'sub' will default to agent owner.")
+            logger.warning(f"Requesting agent token without piper_link_instance_id for audience {audience}. Token 'sub' will default to agent owner ID. This may lead to permission errors if user context is required for the target resource.")
         
         data_encoded = urlencode(data_dict)
         request_start_time = time.time()
@@ -164,9 +190,9 @@ class PiperClient:
             status_code = e.response.status_code if e.response is not None else None
             error_details = None
             if e.response is not None:
-                try: # INDENTED
+                try:
                     error_details = e.response.json()
-                except requests.exceptions.JSONDecodeError: # INDENTED
+                except requests.exceptions.JSONDecodeError:
                     error_details = e.response.text
             log_ctx = f"instance {instance_id}" if instance_id else "no instance"
             logger.error(f"Network error getting agent token for {log_ctx}. Status: {status_code}", exc_info=True)
@@ -199,43 +225,54 @@ class PiperClient:
         if self._discovered_instance_id: return self._discovered_instance_id
         return self.discover_local_instance_id()
 
+    def _normalize_variable_name(self, variable_name: str) -> str:
+        """Converts variable name to lowercase_snake_case."""
+        if not variable_name: return "" # Should be caught by earlier validation in calling methods
+        s1 = re.sub(r'[-\s]+', '_', variable_name) # Replace hyphens and spaces with underscore
+        s2 = re.sub(r'[^\w_]', '', s1)           # Remove non-alphanumeric (except underscore)
+        s3 = re.sub(r'_+', '_', s2)              # Replace multiple underscores with single
+        return s3.lower()
+
     def _resolve_piper_variable(self, variable_name: str, instance_id_for_context: str) -> str:
         if not variable_name or not isinstance(variable_name, str): raise ValueError("variable_name must be non-empty string.")
         trimmed_variable_name = variable_name.strip()
-        if not trimmed_variable_name: raise ValueError("variable_name cannot be empty.")
+        if not trimmed_variable_name: raise ValueError("variable_name cannot be empty after stripping.")
+        
+        normalized_name = self._normalize_variable_name(trimmed_variable_name)
+        if not normalized_name: raise ValueError(f"Original variable name '{variable_name}' normalized to an empty/invalid string.")
+
         try:
             target_audience = self.resolve_mapping_url
             agent_token = self._get_valid_agent_token(audience=target_audience, instance_id=instance_id_for_context)
             headers = {'Authorization': f'Bearer {agent_token}', 'Content-Type': 'application/json'}
-            payload = {'variableName': trimmed_variable_name}
-            logger.info(f"Calling (Piper) resolve_variable_mapping for var: '{trimmed_variable_name}', instance: {instance_id_for_context}")
+            payload = {'variableName': normalized_name} # Send normalized name
+            logger.info(f"Calling (Piper) resolve_variable_mapping for original_var: '{variable_name}', normalized_to: '{normalized_name}', instance: {instance_id_for_context}")
             response = self._session.post(self.resolve_mapping_url, headers=headers, json=payload, timeout=12)
+            
             if 400 <= response.status_code < 600:
                 error_details: Any = None; error_code: str = f'http_{response.status_code}'; error_description: str = f"API Error {response.status_code}"
                 try: error_details = response.json(); error_code = error_details.get('error', error_code); error_description = error_details.get('error_description', error_details.get('message', str(error_details)))
                 except requests.exceptions.JSONDecodeError: error_details = response.text; error_description = error_details if error_details else error_description
-                logger.error(f"API error resolving mapping for var '{trimmed_variable_name}', instance {instance_id_for_context}. Status: {response.status_code}, Code: {error_code}, Details: {error_details}")
+                logger.error(f"API error resolving mapping for var '{normalized_name}' (original: '{variable_name}'), instance {instance_id_for_context}. Status: {response.status_code}, Code: {error_code}, Details: {error_details}")
                 if response.status_code == 401 or error_code == 'invalid_token': self._token_expiries[(target_audience, instance_id_for_context)] = 0
-                if response.status_code == 404 or error_code == 'mapping_not_found': raise PiperAuthError(f"No active grant mapping found for var '{trimmed_variable_name}' for instance '{instance_id_for_context}'.", status_code=404, error_code='mapping_not_found', error_details=error_details)
+                if response.status_code == 404 or error_code == 'mapping_not_found': raise PiperAuthError(f"No active grant mapping found for var '{normalized_name}' (original: '{variable_name}') for instance '{instance_id_for_context}'. Check Piper UI grants.", status_code=404, error_code='mapping_not_found', error_details=error_details)
                 raise PiperAuthError(f"Failed to resolve var mapping: {error_description}", status_code=response.status_code, error_code=error_code, error_details=error_details)
+            
             mapping_data = response.json(); credential_id = mapping_data.get('credentialId')
             if not credential_id or not isinstance(credential_id, str):
                 raise PiperAuthError("Invalid response from resolve (missing credentialId).", response.status_code, error_details=mapping_data)
-            logger.info(f"Piper resolved var '{trimmed_variable_name}' for instance '{instance_id_for_context}' to credentialId '{credential_id}'.")
+            logger.info(f"Piper resolved var '{normalized_name}' (original: '{variable_name}') for instance '{instance_id_for_context}' to credentialId '{credential_id}'.")
             return credential_id
         except (PiperAuthError, ValueError): raise
         except requests.exceptions.RequestException as e:
-            status_code = e.response.status_code if e.response is not None else None
-            error_details = None
+            status_code = e.response.status_code if e.response is not None else None; error_details = None
             if e.response is not None:
-                try: # INDENTED
-                    error_details = e.response.json()
-                except requests.exceptions.JSONDecodeError: # INDENTED
-                    error_details = e.response.text
-            logger.error(f"Network error calling {self.resolve_mapping_url} for instance {instance_id_for_context}. Status: {status_code}", exc_info=True)
+                try: error_details = e.response.json()
+                except requests.exceptions.JSONDecodeError: error_details = e.response.text
+            logger.error(f"Network error calling {self.resolve_mapping_url} for instance {instance_id_for_context} (var: '{normalized_name}'). Status: {status_code}", exc_info=True)
             raise PiperAuthError(f"Network error resolving variable: {e}", status_code=status_code, error_details=error_details) from e
         except Exception as e:
-            logger.error(f"Unexpected error resolving variable for instance {instance_id_for_context}: {e}", exc_info=True)
+            logger.error(f"Unexpected error resolving variable for instance {instance_id_for_context} (var: '{normalized_name}'): {e}", exc_info=True)
             raise PiperError(f"Unexpected error resolving variable: {e}") from e
 
     def _fetch_piper_sts_token(self, credential_ids: List[str], instance_id_for_context: str) -> Dict[str, Any]:
@@ -266,13 +303,10 @@ class PiperClient:
             return scoped_data
         except (PiperAuthError, ValueError): raise
         except requests.exceptions.RequestException as e:
-            status_code = e.response.status_code if e.response is not None else None
-            error_details = None
+            status_code = e.response.status_code if e.response is not None else None; error_details = None
             if e.response is not None:
-                try: # INDENTED
-                    error_details = e.response.json()
-                except requests.exceptions.JSONDecodeError: # INDENTED
-                    error_details = e.response.text
+                try: error_details = e.response.json()
+                except requests.exceptions.JSONDecodeError: error_details = e.response.text
             logger.error(f"Network error calling {self.get_scoped_url} for instance {instance_id_for_context}. Status: {status_code}", exc_info=True)
             raise PiperAuthError(f"Network error getting scoped creds: {e}", status_code=status_code, error_details=error_details) from e
         except Exception as e:
@@ -297,6 +331,7 @@ class PiperClient:
                 raise PiperLinkNeededError()
 
             logger.info(f"Attempting to retrieve secret for '{variable_name}' via Piper (instance: {effective_instance_id}).")
+            # _resolve_piper_variable will use the original variable_name for normalization
             credential_id = self._resolve_piper_variable(variable_name, effective_instance_id)
             piper_sts_response = self._fetch_piper_sts_token([credential_id], effective_instance_id)
 
@@ -317,7 +352,7 @@ class PiperClient:
                 logger.info(f"Piper grant/mapping issue for '{variable_name}' (Code: {e.error_code}). {e}")
             else:
                 logger.warning(f"Piper authentication/authorization error for '{variable_name}': {e}")
-        except PiperConfigError as e: # Catch specific config errors from Piper flow
+        except PiperConfigError as e:
             piper_error_encountered = e
             logger.warning(f"Piper SDK configuration error during Piper flow for '{variable_name}': {e}")
         except Exception as e:
@@ -331,18 +366,24 @@ class PiperClient:
         if not _is_fallback_enabled_for_call:
             if piper_error_encountered:
                 raise piper_error_encountered
-            else: # Should not be reached if PiperLinkNeededError is raised correctly above
+            else: 
                 raise PiperConfigError(f"Piper flow not attempted/failed (instanceId: {effective_instance_id}) and fallback disabled for '{variable_name}'.")
 
         env_var_to_check = fallback_env_var_name
         if not env_var_to_check:
+            # Use the original variable_name for map lookup and normalization base
             if self.env_variable_map and variable_name in self.env_variable_map:
                 env_var_to_check = self.env_variable_map[variable_name]
-                logger.debug(f"Using exact map for '{variable_name}': looking for env var '{env_var_to_check}'.")
+                logger.debug(f"Using exact map for original var '{variable_name}': looking for env var '{env_var_to_check}'.")
             else:
-                normalized_var_name = variable_name.upper().replace(' ', '_').replace('-', '_')
-                env_var_to_check = f"{self.env_variable_prefix}{normalized_var_name}"
-                logger.debug(f"Using prefix '{self.env_variable_prefix}' for '{variable_name}': looking for env var '{env_var_to_check}'.")
+                # Normalize the original variable_name for env var construction
+                normalized_for_env = variable_name.upper().replace(' ', '_').replace('-', '_')
+                # Further cleanup for env var compatibility (remove other special chars if any left)
+                normalized_for_env = re.sub(r'[^\w_]', '', normalized_for_env)
+                normalized_for_env = re.sub(r'_+', '_', normalized_for_env) # Consolidate underscores
+
+                env_var_to_check = f"{self.env_variable_prefix}{normalized_for_env}"
+                logger.debug(f"Using prefix '{self.env_variable_prefix}' for original var '{variable_name}' (normalized to '{normalized_for_env}'): looking for env var '{env_var_to_check}'.")
         else:
             logger.debug(f"Using explicit fallback_env_var_name: '{env_var_to_check}'.")
         
@@ -363,7 +404,6 @@ class PiperClient:
             if piper_error_encountered:
                 original_error_msg = str(piper_error_encountered)
                 appended_msg = f" Also, fallback env var '{env_var_to_check}' not found."
-                # CORRECTED EXCEPTION RE-RAISING
                 if isinstance(piper_error_encountered, PiperAuthError):
                     raise PiperAuthError(
                         f"{original_error_msg}{appended_msg}",
@@ -372,10 +412,10 @@ class PiperClient:
                         error_details=getattr(piper_error_encountered, 'error_details', None)
                     ) from piper_error_encountered
                 elif isinstance(piper_error_encountered, (PiperLinkNeededError, PiperConfigError)):
-                    raise type(piper_error_encountered)( # Re-raise the specific type
+                    raise type(piper_error_encountered)(
                         f"{original_error_msg}{appended_msg}"
                     ) from piper_error_encountered
-                else: # Should not happen if piper_error_encountered is one of our types
+                else:
                      raise PiperConfigError(f"Piper flow failed: {original_error_msg}. Fallback env var '{env_var_to_check}' also not found.") from piper_error_encountered
             else:
                 raise PiperConfigError(f"Could not retrieve credentials for '{variable_name}'. Piper context not established and environment variable '{env_var_to_check}' not set.")
@@ -385,6 +425,7 @@ class PiperClient:
         target_instance_id = self._get_instance_id_for_api_call(instance_id)
         if not target_instance_id:
             raise PiperLinkNeededError("Instance ID required for resolving variable.")
+        # _resolve_piper_variable will handle normalization of variable_name
         return self._resolve_piper_variable(variable_name, target_instance_id)
 
     def get_scoped_credentials_by_id(self, credential_ids: List[str], instance_id: Optional[str] = None) -> Dict[str, Any]:
