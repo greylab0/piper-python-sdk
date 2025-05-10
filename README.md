@@ -72,13 +72,6 @@ pip install pyper-sdk
 - Client Secret Name (stored in Piper’s GCP Secret Manager)
 - Logical Variable Names
 
-### GCP IAM
-
-- `secretmanager.secretAccessor` on:
-  ```
-  projects/PIPER_PROJECT_ID/secrets/agent-secret-YOUR_AGENT_CLIENT_ID/versions/latest
-  ```
-
 ---
 
 ## 🧑‍💻 SDK Usage
