@@ -1,62 +1,58 @@
+
 # Pyper SDK for Python
 
-![Pyper Logo](https://your-logo-url.com) <!-- Replace with actual logo image URL -->
+![Piper SDK](https://img.shields.io/badge/piper-sdk-blue)
 
-The **official Python SDK** for integrating your applications (agents, MCPs, scripts) with **Piper**, the secure credential management system designed for the AI era.
+The official Python SDK for integrating your applications (agents, MCPs, scripts) with **Piper**, the secure credential management system designed for the AI era.
 
-> ❗ Stop asking users to paste sensitive API keys directly into every tool!  
-> With Piper, secrets are stored once in a central, secure vault, and applications can request temporary, scoped access—**only with user permission**.
-
----
-
-## 🔑 What This SDK Does
-
-This SDK simplifies your agent's integration with Piper by enabling it to:
-
-- Establish the end-user's Piper context (via **Piper Link**).
-- Authenticate your application with Piper.
-- Request secrets using logical variable names.
-- Receive short-lived **GCP STS tokens** to retrieve secrets from **Google Secret Manager**.
-- Optionally fall back to environment variables if Piper is unavailable.
+> Stop asking your users to paste sensitive API keys directly into every tool! With Piper, users store their secrets once in a central, secure vault. Your application, using this SDK, can request temporary, scoped access to those secrets only after the user has explicitly granted permission via the Piper dashboard.
 
 ---
 
-## 🚨 Core Problem Piper Solves
+## Features
 
-Modern AI apps need access to user credentials (e.g., OpenAI keys, DB passwords, Slack tokens). Asking users to paste these credentials:
-
-- ❌ Creates **Secret Sprawl**
-- ❌ Increases **Attack Surface**
-- ❌ Makes **Revocation Difficult**
-- ❌ Lacks **Audit & Control**
-
-**✅ Piper** provides centralized, user-controlled secret access.
+- Establish end-user's Piper context via Piper Link
+- Authenticate your agent to the Piper system
+- Request access to secrets via logical variable names
+- Receive short-lived GCP STS tokens to fetch secrets from Google Secret Manager
+- Optional fallback to environment variables
 
 ---
 
-## 🧩 How It Works
+## 🚩 Problem Piper Solves
 
-### 1. **End-User Setup**
-- Adds secrets (e.g., “My OpenAI Key”) via **Piper dashboard**.
-- Piper stores secrets securely in **Google Secret Manager**.
-- Installs **Piper Link** and performs a one-time login (creates `instanceId`).
+Modern AI agents and applications often require access to numerous sensitive user credentials (OpenAI keys, DB passwords, Slack tokens, etc.).
 
-### 2. **Developer Setup**
-- Register your agent (`MyCoolAgent`) in Piper:
-  - Define logical variable names (e.g., `openai_api_token`)
-  - Receive `client_id` and `client_secret_name`
+**Problems with the current approach:**
 
-### 3. **User Grants Access**
-- User maps their secret to the variable name your agent uses in the Piper UI.
+- 🔑 **Secret Sprawl**: Keys duplicated across tools
+- 🔓 **Increased Attack Surface**: One weak link exposes everything
+- 🔄 **Difficult Revocation**: Manually remove keys across tools
+- 📉 **Lack of Control & Audit**: Users lose track of which tool has what
 
-### 4. **Your App Uses the SDK**
-- Call `get_secret("openai_api_token")`
-- Piper authenticates the agent and user
-- Returns short-lived **STS token**
-- Your agent uses this token to fetch the actual secret from GCP
+**Piper** solves this with centralized, user-controlled secret management.
 
-### 5. **Fallback Option (Optional)**
-- If Piper isn't available, the SDK can fall back to environment variables.
+---
+
+## 🔧 How it Works
+
+### For Users:
+
+1. **Add Secrets in Piper Dashboard**  
+2. **Install Piper Link** (CLI/desktop helper app)  
+3. **Login via Piper Link** to establish local context  
+4. **Grant Access** to agents in the Piper dashboard  
+
+### For Developers:
+
+1. **Register Agent** in Piper (define logical variable names)
+2. **Use SDK in your app** to request secrets via those names
+3. SDK retrieves:
+    - Piper context (via Link)
+    - GCP STS token (if permitted)
+    - Actual secret from Google Secret Manager
+
+If Piper fails, environment variable fallback (optional) is used.
 
 ---
 
@@ -64,111 +60,124 @@ Modern AI apps need access to user credentials (e.g., OpenAI keys, DB passwords,
 
 ```bash
 pip install pyper-sdk
+```
 
+---
 
-✅ Prerequisites
-For Your Agent
-Agent must be registered with Piper:
+## ✅ Prerequisites
 
-client_id
+### Agent Registration
 
-client_secret_name
+- Client ID
+- Client Secret Name (stored in Piper’s GCP Secret Manager)
+- Logical Variable Names
 
-Define logical variable names
+### GCP IAM
 
-Runtime must have IAM access to your agent’s secret:
+- `secretmanager.secretAccessor` on:
+  ```
+  projects/PIPER_PROJECT_ID/secrets/agent-secret-YOUR_AGENT_CLIENT_ID/versions/latest
+  ```
 
-GCP Role: secretmanager.secretAccessor
+---
 
-For End Users
-Piper account
+## 🧑‍💻 SDK Usage
 
-Install and run Piper Link
-
-Grant your agent access via Piper dashboard
-
-🧪 Example Usage
-python
-Copy
-Edit
+```python
 import os
 import logging
 from pyper_sdk.client import PiperClient, PiperConfigError, PiperAuthError, PiperLinkNeededError
 from google.cloud import secretmanager
 
-# Configuration
 AGENT_CLIENT_ID = os.environ.get("MY_AGENT_PIPER_CLIENT_ID")
 AGENT_CLIENT_SECRET_NAME_IN_PIPER_SM = os.environ.get("MY_AGENT_PIPER_CLIENT_SECRET_NAME")
 PIPER_PROJECT_ID = os.environ.get("PIPER_SYSTEM_PROJECT_ID", "444535882337")
 
-# Logging
 logging.basicConfig(level=logging.INFO)
 sdk_logger = logging.getLogger('PiperSDK')
 sdk_logger.setLevel(logging.INFO)
 
-# Fetch your agent's client secret
-def fetch_agent_client_secret_from_piper_sm(piper_gcp_project_id, secret_name):
+def fetch_agent_client_secret_from_piper_sm(piper_gcp_project_id: str, secret_name: str) -> str:
     try:
         sm_client = secretmanager.SecretManagerServiceClient()
-        full_name = f"projects/{piper_gcp_project_id}/secrets/{secret_name}/versions/latest"
-        response = sm_client.access_secret_version(request={"name": full_name})
+        full_secret_name = f"projects/{piper_gcp_project_id}/secrets/{secret_name}/versions/latest"
+        response = sm_client.access_secret_version(request={"name": full_secret_name})
         return response.payload.data.decode("UTF-8")
     except Exception as e:
-        raise PiperConfigError(f"Could not fetch client secret: {e}") from e
+        logging.error(f"Failed to fetch agent client secret '{secret_name}' from Piper's Secret Manager: {e}", exc_info=True)
+        raise PiperConfigError(f"Could not fetch agent client secret '{secret_name}'.") from e
+```
 
-# Initialize the Piper Client
-agent_client_secret_value = fetch_agent_client_secret_from_piper_sm(
-    PIPER_PROJECT_ID, AGENT_CLIENT_SECRET_NAME_IN_PIPER_SM
-)
+---
+
+## 🔐 Getting a Secret
+
+```python
 piper_client = PiperClient(
     client_id=AGENT_CLIENT_ID,
-    client_secret=agent_client_secret_value,
-    project_id=PIPER_PROJECT_ID,
+    client_secret=fetch_agent_client_secret_from_piper_sm(PIPER_PROJECT_ID, AGENT_CLIENT_SECRET_NAME_IN_PIPER_SM),
+    project_id=PIPER_PROJECT_ID
 )
 
-# Get a secret from Piper
 try:
-    result = piper_client.get_secret("MyGmailVar")
-    print("Source:", result["source"])
-    print("Value (last 6 chars):", result["value"][-6:])
+    secret_info = piper_client.get_secret("MyGmailVar")
+    print(f"Source: {secret_info.get('source')}")
+    print(f"Value (last 6): ...{secret_info.get('value', '')[-6:]}")
 except PiperLinkNeededError:
-    print("Piper Link is not running.")
+    print("ERROR: Piper Link is not set up.")
 except PiperAuthError as e:
-    print(f"Piper authorization error: {e}")
-🔁 Environment Variable Fallback
-If Piper access fails, the SDK can fall back to env vars:
+    print(f"ERROR: Piper authentication error: {e}")
+except PiperConfigError as e:
+    print(f"ERROR: SDK Configuration Error: {e}")
+```
 
-python
-Copy
-Edit
-piper_client = PiperClient(
-    client_id=...,
-    client_secret=...,
+---
+
+## 🔁 Fallback to Environment Variable
+
+```python
+os.environ["MY_APP_MYOPENAIVAR"] = "env_secret_value"
+
+secret_info = piper_client.get_secret("MyOpenAIVar")
+print(f"Source: {secret_info.get('source')}")
+print(f"Value: {secret_info.get('value')}")
+```
+
+---
+
+## 🧠 Error Handling
+
+`get_secret()` may raise:
+
+- `ValueError`: Invalid variable
+- `PiperLinkNeededError`: Piper Link not running
+- `PiperAuthError`: Grant or permission issue
+- `PiperConfigError`: Config error, env fallback fails
+
+Always use try/except blocks to catch these.
+
+---
+
+## 🧪 Env Var Fallback Options
+
+### Client init options
+
+```python
+PiperClient(
     enable_env_fallback=True,
     env_variable_prefix="MY_APP_",
-    env_variable_map={"MyGmailVar": "MY_GMAIL_SECRET_ENV_VAR"}
+    env_variable_map={"My API Key": "MY_CUSTOM_ENV_VAR"}
 )
-Fallback lookup order:
+```
 
-env_variable_map (exact match)
+### Overrides
 
-env_variable_prefix + UPPERCASE(variable_name)
+```python
+get_secret("My API Key", enable_env_fallback_for_this_call=True, fallback_env_var_name="MY_API_KEY_OVERRIDE")
+```
 
-⚠️ Error Handling
-get_secret() may raise:
+---
 
-ValueError: Invalid variable name
+## 📄 License
 
-PiperLinkNeededError: Piper Link not running
-
-PiperAuthError: Authorization issue
-
-PiperConfigError: Configuration or fallback failure
-
-Always wrap in try...except.
-
-🧑‍💻 Development & Contributing
-Standard PR and issue process. Contributions welcome.
-
-🪪 License
-MIT License
+MIT
