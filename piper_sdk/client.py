@@ -1,6 +1,7 @@
 # piper_sdk/client.py
 
 import os
+import re
 import requests
 import time
 from urllib.parse import urlencode
