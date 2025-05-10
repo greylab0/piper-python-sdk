@@ -1,36 +1,26 @@
-# setup.py
 import setuptools
-import os
-
-# Function to read the README file for the long description
-def read(fname):
-    try:
-        return open(os.path.join(os.path.dirname(__file__), fname), encoding='utf-8').read()
-    except IOError:
-        return "" # Return empty string if README is not found
 
 setuptools.setup(
-    name="pyper-sdk",  # How users will pip install it (e.g., piper-sdk)
-    version="0.1.0",  # Start with an initial version
-    author="Piper", # CHANGE THIS
-    author_email="devs@agentpiper.com", # CHANGE THIS
-    description="Python SDK for Piper Agent Credential Management",
-    long_description=read('README.md'), # Reads the README file
-    long_description_content_type="text/markdown", # Format of the README
-    url="https://github.com/greylab0/piper-python-sdk", # CHANGE THIS LATER
-    # Automatically find the piper_sdk package
+    name="pyper-sdk",  # The pip install name
+    version="0.3.0",
+    author="Piper",
+    author_email="devs@agentpiper.com",
+    description="Python SDK for Piper Agent Credential Management with environment fallback.", # Update description
+    long_description=open('README.md').read(),
+    long_description_content_type="text/markdown",
+    url="https://github.com/greylab0/piper-python-sdk", # Your GitHub repo
+    
+    # This line tells setuptools to find the 'piper_sdk' directory
+    # and package it as the 'piper_sdk' module.
     packages=setuptools.find_packages(where=".", include=['piper_sdk*']),
-    # If your code was in a 'src' directory, uncomment and adjust below:
-    # package_dir={'': 'src'},
-    # packages=setuptools.find_packages(where='src'),
+    # If you only have one top-level package, you can also do:
+    # packages=['piper_sdk'], 
 
-    # List of dependencies needed by your SDK
     install_requires=[
-        "requests>=2.20.0", # Dependency for making HTTP calls
+        "requests>=2.20.0",
+        # "keyring>=23.0.0", # Only if SDK directly uses keyring, currently it doesn't
     ],
-    # Minimum Python version supported
     python_requires='>=3.7',
-    # Standard classifiers to help users find your package
     classifiers=[
         "Programming Language :: Python :: 3",
         "Programming Language :: Python :: 3.7",
@@ -38,15 +28,15 @@ setuptools.setup(
         "Programming Language :: Python :: 3.9",
         "Programming Language :: Python :: 3.10",
         "Programming Language :: Python :: 3.11",
-        "License :: OSI Approved :: MIT License", # Or choose another license like Apache-2.0
+        "License :: OSI Approved :: MIT License", # Or your chosen SPDX identifier
         "Operating System :: OS Independent",
-        "Development Status :: 3 - Alpha", # Current status
+        "Development Status :: 4 - Beta", # Updated status
         "Intended Audience :: Developers",
         "Topic :: Software Development :: Libraries :: Python Modules",
         "Topic :: Security",
     ],
-    keywords='piper credentials secrets sdk agent gcp sts', # Add relevant keywords
-    project_urls={ # Optional: Add relevant links
+    keywords='piper credentials secrets sdk agent gcp sts mcp llm api key',
+    project_urls={
         'Documentation': 'https://github.com/greylab0/piper-python-sdk/blob/main/README.md',
         'Source': 'https://github.com/greylab0/piper-python-sdk',
         'Tracker': 'https://github.com/greylab0/piper-python-sdk/issues',
