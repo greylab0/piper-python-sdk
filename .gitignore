@@ -94,3 +94,4 @@ secrets.json
 *_secret*.py
 
 .pypirc
+venv_sdk/
