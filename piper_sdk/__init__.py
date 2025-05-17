@@ -1,15 +1,28 @@
 # piper_sdk/__init__.py
 
-"""
-Piper SDK Package.
+from .client import (
+    PiperClient,
+    PiperError,
+    PiperConfigError,
+    PiperLinkNeededError,
+    PiperAuthError,
+    PiperGrantError, # Added
+    PiperGrantNeededError, # Now inherits from PiperGrantError
+    PiperForbiddenError, # Added
+    PiperRawSecretExchangeError 
+)
 
-This file marks the directory 'piper_sdk' as a Python package,
-allowing modules within it (like client.py) to be imported.
-"""
+__version__ = "0.4.2" # <-- UPDATE THIS
 
-# Optionally, you can make classes/functions available directly when importing piper_sdk
-# For example:
-# from .client import PiperClient, PiperAuthError, PiperConfigError
-
-# However, it's often clearer to require users to import explicitly:
-# from piper_sdk.client import PiperClient
+__all__ = [
+    "PiperClient",
+    "PiperError",
+    "PiperConfigError",
+    "PiperLinkNeededError",
+    "PiperAuthError",
+    "PiperGrantError",
+    "PiperGrantNeededError",
+    "PiperForbiddenError",
+    "PiperRawSecretExchangeError",
+    "__version__"
+]
