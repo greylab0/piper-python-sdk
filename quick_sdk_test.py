@@ -175,46 +175,74 @@ class TestPiperSDKRawSecretFetch(unittest.TestCase):
         logger.info(f"SUCCESS: Fell back to environment variable: {secret_info.get('value')}")
 
 
-# Add this new test method to the TestPiperSDKRawSecretFetch class in quick_sdk_test.py
+# In quick_sdk_test.py, inside the TestPiperSDKRawSecretFetch class
 
     @requests_mock.Mocker()
     def test_06_grant_needed_error_includes_url(self, m):
-        logger.info("--- Test 06: PiperGrantNeededError Includes Constructed URL ---")
-        # Use the actual default UI base URL from the client if not overridden
-        expected_grant_page_base = PiperClient.DEFAULT_PIPER_UI_BASE_URL 
-        client = self._get_mock_piper_client(
-            instance_id_at_init=KNOWN_INSTANCE_ID,
-            # piper_ui_grant_page_url is not passed to _get_mock_piper_client,
-            # so it will use the default from PiperClient class.
-            # If you want to test overriding it, add it to _get_mock_piper_client
-            # and pass a custom URL here.
-        )
-        client.piper_ui_grant_page_url = expected_grant_page_base # Explicitly ensure it's set for test clarity
+            logger.info("--- Test 06: PiperGrantNeededError Includes Constructed URL ---")
+            
+            custom_grant_page_url = "https://testpiper.com/managegrants" 
+            
+            client = PiperClient( 
+                client_id=TEST_AGENT_CLIENT_ID, 
+                client_secret=TEST_AGENT_CLIENT_SECRET,
+                token_url=MOCK_TOKEN_URL,
+                resolve_mapping_url=MOCK_RESOLVE_URL,
+                get_scoped_url=MOCK_GET_SCOPED_URL,
+                piper_link_service_url="http://localhost:0", 
+                piper_link_instance_id=KNOWN_INSTANCE_ID, 
+                auto_discover_instance_id=False,
+                exchange_secret_url=MOCK_EXCHANGE_SECRET_URL, # Can be present or None
+                piper_ui_grant_page_url=custom_grant_page_url 
+            )
 
-        # Mock agent token fetch for resolve_variable_mapping
-        m.post(MOCK_TOKEN_URL, json={'access_token': 'jwt_for_resolve', 'expires_in': 3600})
-        # Mock resolve_variable_mapping to return 404 mapping_not_found
-        m.post(MOCK_RESOLVE_URL, 
-               status_code=404, 
-               json={'error': 'mapping_not_found', 
-                     'error_description': 'Test explicit grant missing for variable.'})
+            m.post(MOCK_TOKEN_URL, json={'access_token': 'jwt_for_resolve', 'expires_in': 3600})
+            
+            variable_to_request = "GrantMeThisVar" # Original casing
+            # SDK normalizes to 'grantmethisvar' for backend, but uses original for error message context
+            
+            m.post(MOCK_RESOLVE_URL, 
+                   status_code=404, 
+                   json={'error': 'mapping_not_found', 
+                         'error_description': f"Test grant missing for {variable_to_request}."}) # Mock uses original
 
-        variable_to_request = "VerySpecificVar"
-        expected_url_params = urlencode({
-            'scope': 'manage_grants',
-            'client': TEST_AGENT_CLIENT_ID, # From your test config
-            'variable': variable_to_request
-        }, quote_via=_quote_plus)
-        expected_full_grant_url = f"{expected_grant_page_base}?{expected_url_params}"
+            # For fallback env var name construction by SDK (no prefix, no map entry):
+            # It will be original_variable_name.upper().replace(' ', '_').replace('-', '_') etc.
+            # GrantMeThisVar -> GRANTMETHISVAR
+            expected_env_var_name_for_fallback = "GRANTMETHISVAR"
 
-        with self.assertRaises(PiperGrantNeededError) as cm:
-            client.get_secret(variable_to_request)
-        
-        error_message = str(cm.exception)
-        self.assertIn("No active grant mapping found", error_message)
-        self.assertIn(expected_full_grant_url, error_message)
-        logger.info(f"SUCCESS: PiperGrantNeededError correctly raised with helpful URL.")
-        logger.debug(f"Full error: {error_message}")
+            expected_url_params_dict = {
+                'scope': 'manage_grants',
+                'client': TEST_AGENT_CLIENT_ID, 
+                'variable': variable_to_request # The URL should use the original variable name
+            }
+            from urllib.parse import urlencode as _urlencode, quote_plus as _quote_plus
+            expected_url_params_encoded = _urlencode(expected_url_params_dict, quote_via=_quote_plus)
+            expected_full_grant_url = f"{custom_grant_page_url}?{expected_url_params_encoded}"
+
+            with self.assertRaises(PiperGrantNeededError) as cm:
+                client.get_secret(variable_to_request) 
+            
+            # --- ALL ASSERTIONS NOW INSIDE THE 'with' BLOCK ---
+            error_obj = cm.exception
+            error_message_str = str(error_obj) 
+            logger.info(f"Captured error object: {error_obj!r}")
+            logger.info(f"Captured error message string for Test 06: {error_message_str}")
+
+            self.assertIn("No active grant mapping found", error_message_str) 
+            self.assertIn(f"(original: '{variable_to_request}')", error_message_str) 
+            self.assertIn("Also, fallback environment variable", error_message_str) 
+            self.assertIn(f"'{expected_env_var_name_for_fallback}' was not found", error_message_str) 
+            self.assertIn(expected_full_grant_url, error_message_str) 
+            
+            self.assertEqual(error_obj.agent_id_for_grant, TEST_AGENT_CLIENT_ID)
+            self.assertEqual(error_obj.variable_name_requested, variable_to_request)
+            self.assertEqual(error_obj.piper_ui_grant_url_template, custom_grant_page_url)
+            self.assertEqual(error_obj.constructed_grant_url, expected_full_grant_url)
+            self.assertEqual(error_obj.status_code, 404) 
+            self.assertEqual(error_obj.error_code, 'mapping_not_found') 
+            
+            logger.info(f"SUCCESS (Test 06): PiperGrantNeededError correctly raised with helpful URL: {expected_full_grant_url}")
 
 if __name__ == '__main__':
     # Temporarily set env vars if not present, for the dummy client_id/secret

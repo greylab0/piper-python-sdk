@@ -12,7 +12,7 @@ from .client import (
     PiperRawSecretExchangeError 
 )
 
-__version__ = "0.4.2" # <-- UPDATE THIS
+__version__ = "0.4.3" # <-- UPDATE THIS
 
 __all__ = [
     "PiperClient",
