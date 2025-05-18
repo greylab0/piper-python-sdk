@@ -4,7 +4,7 @@ import os
 import re
 import requests
 import time
-from urllib.parse import urlencode, quote_plus as _quote_plus # Import quote_plus for URL encoding params
+from urllib.parse import urlencode, quote_plus as _quote_plus
 import logging
 from typing import List, Dict, Any, Optional, Tuple
 import uuid
@@ -54,17 +54,16 @@ class PiperGrantError(PiperAuthError):
         super().__init__(message, status_code, error_code, error_details)
         self.agent_id_for_grant = agent_id_for_grant
         self.variable_name_requested = variable_name_requested
-        self.piper_ui_grant_url_template = piper_ui_grant_url_template # e.g. "https://agentpiper.com/secrets"
+        self.piper_ui_grant_url_template = piper_ui_grant_url_template
         self.constructed_grant_url = None
 
         if self.piper_ui_grant_url_template and self.agent_id_for_grant and self.variable_name_requested:
             try:
-                # Construct URL: https://agentpiper.com/secrets?scope=manage_grants&client=<AGENT_ID>&variable=<VAR_NAME>
                 base_url = self.piper_ui_grant_url_template.rstrip('/')
                 params = {
                     'scope': 'manage_grants',
                     'client': self.agent_id_for_grant,
-                    'variable': self.variable_name_requested # Your /secrets page can use this to guide the user
+                    'variable': self.variable_name_requested
                 }
                 self.constructed_grant_url = f"{base_url}?{urlencode(params, quote_via=_quote_plus)}"
             except Exception as e_url:
@@ -79,18 +78,17 @@ class PiperGrantError(PiperAuthError):
         return base_str
 
 
-class PiperGrantNeededError(PiperGrantError): # This now inherits from the enhanced PiperGrantError
+class PiperGrantNeededError(PiperGrantError):
     """Raised when a specific grant is required but not found or inactive for a variable."""
     def __init__(self,
-                 message: str, # Specific message from backend
+                 message: str,
                  status_code: Optional[int] = None,
-                 error_code: Optional[str] = 'grant_needed', # Default error code
+                 error_code: Optional[str] = 'grant_needed',
                  error_details: Optional[Any] = None,
                  agent_id_for_grant: Optional[str] = None,
                  variable_name_requested: Optional[str] = None,
                  piper_ui_grant_url_template: Optional[str] = None
                 ):
-        # Pass all params up to PiperGrantError which will construct the URL
         super().__init__(message, status_code, error_code, error_details,
                          agent_id_for_grant, variable_name_requested, piper_ui_grant_url_template)
 
@@ -124,8 +122,11 @@ class PiperClient:
     DEFAULT_PIPER_TOKEN_URL = f"https://piper-token-endpoint-{DEFAULT_PROJECT_ID}.{DEFAULT_REGION}.run.app"
     DEFAULT_PIPER_GET_SCOPED_URL = f"https://getscopedgcpcredentials-{DEFAULT_PROJECT_ID}.{DEFAULT_REGION}.run.app"
     DEFAULT_PIPER_RESOLVE_MAPPING_URL = f"https://piper-resolve-variable-mapping-{DEFAULT_PROJECT_ID}.{DEFAULT_REGION}.run.app"
+    # --- NEW DEFAULT URL for the Exchange GCF ---
+    DEFAULT_PIPER_EXCHANGE_SECRET_URL = f"https://piper-exchange-sts-for-secret-{DEFAULT_PROJECT_ID}.{DEFAULT_REGION}.run.app"
+
     DEFAULT_PIPER_LINK_SERVICE_URL = "http://localhost:31477/piper-link-context"
-    DEFAULT_PIPER_UI_BASE_URL = "https://agentpiper.com/secrets" # Default for grant links
+    DEFAULT_PIPER_UI_BASE_URL = "https://agentpiper.com/secrets"
 
     def __init__(self,
                  client_id: str,
@@ -135,6 +136,7 @@ class PiperClient:
                  token_url: Optional[str] = None,
                  get_scoped_url: Optional[str] = None,
                  resolve_mapping_url: Optional[str] = None,
+                 exchange_secret_url: Optional[str] = None, # Remains optional for override
                  piper_link_service_url: Optional[str] = None,
                  requests_session: Optional[requests.Session] = None,
                  auto_discover_instance_id: bool = True,
@@ -142,9 +144,7 @@ class PiperClient:
                  env_variable_prefix: str = "",
                  env_variable_map: Optional[Dict[str, str]] = None,
                  piper_link_instance_id: Optional[str] = None,
-                 exchange_secret_url: Optional[str] = None,
-                 # --- NEW PARAMETER ---
-                 piper_ui_grant_page_url: Optional[str] = None # e.g., "https://agentpiper.com/secrets"
+                 piper_ui_grant_page_url: Optional[str] = None
                 ):
 
         if not client_id or not client_secret:
@@ -158,30 +158,33 @@ class PiperClient:
         self.token_url: str = token_url or f"https://piper-token-endpoint-{effective_project_id}.{effective_region}.run.app"
         self.get_scoped_url: str = get_scoped_url or f"https://getscopedgcpcredentials-{effective_project_id}.{effective_region}.run.app"
         self.resolve_mapping_url: str = resolve_mapping_url or f"https://piper-resolve-variable-mapping-{effective_project_id}.{effective_region}.run.app"
+        
+        # --- MODIFIED: Use default for exchange_secret_url if not provided ---
+        self.exchange_secret_url: Optional[str] = exchange_secret_url or f"https://piper-exchange-sts-for-secret-{effective_project_id}.{effective_region}.run.app"
+        
         self.piper_link_service_url: str = piper_link_service_url or self.DEFAULT_PIPER_LINK_SERVICE_URL
-        self.exchange_secret_url: Optional[str] = exchange_secret_url
-
-        # --- ADDED: Store and validate piper_ui_grant_page_url ---
         self.piper_ui_grant_page_url: str = piper_ui_grant_page_url or self.DEFAULT_PIPER_UI_BASE_URL
+
         if self.piper_ui_grant_page_url and not self.piper_ui_grant_page_url.startswith('https://'):
             logger.warning(f"Piper UI Grant Page URL ('{self.piper_ui_grant_page_url}') does not look like a valid HTTPS URL. Grant links may be incorrect.")
 
+        # --- VALIDATION for exchange_secret_url (now applies to default or override) ---
         if self.exchange_secret_url and not self.exchange_secret_url.startswith('https://'):
-            raise PiperConfigError(f"Piper Exchange Secret URL ('{self.exchange_secret_url}') must be a valid HTTPS URL if provided.")
+            raise PiperConfigError(f"Piper Exchange Secret URL ('{self.exchange_secret_url}') must be a valid HTTPS URL.")
 
         for url_attr_name, url_value_str in [
             ("Piper Token URL", self.token_url), ("Piper GetScoped URL", self.get_scoped_url),
             ("Piper Resolve Mapping URL", self.resolve_mapping_url)
+            # exchange_secret_url is already validated above
         ]:
             if not url_value_str or not url_value_str.startswith('https://'):
                 raise PiperConfigError(f"{url_attr_name} ('{url_value_str}') must be a valid HTTPS URL.")
         if not self.piper_link_service_url or not self.piper_link_service_url.startswith('http://localhost'):
-             if self.piper_link_service_url != self.DEFAULT_PIPER_LINK_SERVICE_URL:
+             if self.piper_link_service_url != self.DEFAULT_PIPER_LINK_SERVICE_URL: # Only warn if it's not the default and not localhost
                 logger.warning(f"Piper Link Service URL ('{self.piper_link_service_url}') is not the default localhost URL.")
 
         self._session = requests_session if requests_session else requests.Session()
-        # --- MODIFIED SDK VERSION ---
-        sdk_version = "0.4.2"
+        sdk_version = "0.4.4" # Assuming this is the target version for these changes
         self._session.headers.update({'User-Agent': f'Pyper-SDK/{sdk_version}'})
 
         self._access_tokens: Dict[Tuple[str, Optional[str]], str] = {}
@@ -203,12 +206,20 @@ class PiperClient:
             self.discover_local_instance_id()
         else:
             log_msg_parts.append("Auto-discovery of instance_id is disabled and no instance_id provided at init.")
+        
+        # Log the exchange URL whether it was defaulted or provided
         if self.exchange_secret_url:
-            log_msg_parts.append(f"Raw secret exchange configured via: {self.exchange_secret_url}")
+            source = "provided" if exchange_secret_url else "defaulted" # Check if it was explicitly passed to init
+            log_msg_parts.append(f"Raw secret exchange configured via ({source}): {self.exchange_secret_url}")
+        else: # Should not happen if default is set, but as a safeguard
+            log_msg_parts.append("Raw secret exchange URL is not configured (no default and not provided).")
+
+
         if self.piper_ui_grant_page_url:
             log_msg_parts.append(f"Piper UI grant page base: {self.piper_ui_grant_page_url}")
         logger.info(". ".join(log_msg_parts) + ".")
 
+    # --- discover_local_instance_id ---
     def discover_local_instance_id(self, force_refresh: bool = False) -> Optional[str]:
         if self._configured_instance_id:
             logger.debug(f"Using instance_id provided at init ('{self._configured_instance_id}'), skipping local discovery.")
@@ -237,6 +248,7 @@ class PiperClient:
         self._discovered_instance_id = None
         return None
 
+    # --- _fetch_agent_token ---
     def _fetch_agent_token(self, audience: str, instance_id: Optional[str]) -> Tuple[str, float]:
         instance_ctx_log = f"instance_id: {instance_id}" if instance_id else "no instance context (token 'sub' will default to agent owner)"
         logger.info(f"Requesting agent token via client_credentials for audience: {audience}, {instance_ctx_log}")
@@ -266,7 +278,7 @@ class PiperClient:
                 raise PiperAuthError(f"API error obtaining agent token: {error_description}", status_code=response.status_code, error_code=error_code, error_details=error_details)
             token_data = response.json()
             access_token = token_data.get('access_token')
-            expires_in = int(token_data.get('expires_in', 0))
+            expires_in = int(token_data.get('expires_in', 0)) # Safely convert
             if not access_token:
                 raise PiperAuthError("Token missing in response.", status_code=response.status_code, error_details=token_data)
             expiry_timestamp = request_start_time + expires_in
@@ -277,6 +289,7 @@ class PiperClient:
         except Exception as e:
             raise PiperAuthError(f"Unexpected error fetching agent token: {e}") from e
 
+    # --- _get_valid_agent_token ---
     def _get_valid_agent_token(self, audience: str, instance_id: Optional[str], force_refresh: bool = False) -> str:
         cache_key = (audience, instance_id)
         now = time.time()
@@ -285,12 +298,14 @@ class PiperClient:
            self._token_expiries.get(cache_key, 0) > (now + self.DEFAULT_TOKEN_EXPIRY_BUFFER_SECONDS):
             logger.debug(f"Using cached token for audience: {audience}, instance: {instance_id or 'N/A'}")
             return self._access_tokens[cache_key]
-        logger.info(f"Fetching new token for audience: {audience}, instance: {instance_id or 'N/A'}")
+        # logger.info(f"Fetching {'new' if not (cached_token and not force_refresh) else 'refreshed'} token for audience: {audience}, instance: {instance_id or 'N/A'}")
+        logger.info(f"Fetching token for audience: {audience}, instance: {instance_id or 'N/A'}") # Simpler log
         access_token, expiry_timestamp = self._fetch_agent_token(audience=audience, instance_id=instance_id)
         self._access_tokens[cache_key] = access_token
         self._token_expiries[cache_key] = expiry_timestamp
         return access_token
 
+    # --- _get_instance_id_for_api_call ---
     def _get_instance_id_for_api_call(self, piper_link_instance_id_for_call: Optional[str]) -> Optional[str]:
         if piper_link_instance_id_for_call:
             logger.debug(f"Using instance_id passed directly to API call method: {piper_link_instance_id_for_call}")
@@ -298,11 +313,13 @@ class PiperClient:
         if self._configured_instance_id:
             logger.debug(f"Using instance_id provided at PiperClient initialization: {self._configured_instance_id}")
             return self._configured_instance_id
-        if self._discovered_instance_id:
+        if self._discovered_instance_id: # Check cached discovered ID
             logger.debug(f"Using auto-discovered and cached instance_id: {self._discovered_instance_id}")
             return self._discovered_instance_id
+        # If none of the above, attempt discovery (it will cache if successful)
         return self.discover_local_instance_id()
 
+    # --- _normalize_variable_name ---
     def _normalize_variable_name(self, variable_name: str) -> str:
         if not variable_name: return ""
         s1 = re.sub(r'[-\s]+', '_', variable_name)
@@ -310,10 +327,10 @@ class PiperClient:
         s3 = re.sub(r'_+', '_', s2)
         return s3.lower()
 
-
+    # --- _resolve_piper_variable ---
     def _resolve_piper_variable(self, variable_name: str, instance_id_for_context: str) -> str:
         if not variable_name or not isinstance(variable_name, str): raise ValueError("variable_name must be non-empty string.")
-        trimmed_variable_name = variable_name.strip() # Use original for display/grant URL
+        trimmed_variable_name = variable_name.strip()
         if not trimmed_variable_name: raise ValueError("variable_name cannot be empty after stripping.")
 
         normalized_name = self._normalize_variable_name(trimmed_variable_name)
@@ -338,18 +355,16 @@ class PiperClient:
 
                 logger.error(f"API error resolving mapping for var '{normalized_name}' (original: '{trimmed_variable_name}'), instance {instance_id_for_context}. Status: {response.status_code}, Code: {error_code_from_resp}, Details: {error_details}")
                 if response.status_code == 401 or error_code_from_resp == 'invalid_token':
-                    self._token_expiries[(target_audience, instance_id_for_context)] = 0 # Expire this specific token
+                    self._token_expiries[(target_audience, instance_id_for_context)] = 0
 
-                # --- MODIFIED: Raise enhanced PiperGrantNeededError ---
                 if response.status_code == 404 and error_code_from_resp == 'mapping_not_found':
                     raise PiperGrantNeededError(
                         message=f"No active grant mapping found for variable '{normalized_name}' (original: '{trimmed_variable_name}') for this user context. Please create or activate the grant in Piper.",
                         status_code=404, error_code='mapping_not_found', error_details=error_details,
                         agent_id_for_grant=self.client_id,
-                        variable_name_requested=trimmed_variable_name, # Pass original variable name
+                        variable_name_requested=trimmed_variable_name,
                         piper_ui_grant_url_template=self.piper_ui_grant_page_url
                     )
-                # --- END MODIFICATION ---
                 raise PiperAuthError(f"Failed to resolve var mapping: {error_description}", status_code=response.status_code, error_code=error_code_from_resp, error_details=error_details)
 
             mapping_data = response.json(); credential_id = mapping_data.get('credentialId')
@@ -369,6 +384,7 @@ class PiperClient:
             logger.error(f"Unexpected error resolving variable for instance {instance_id_for_context} (var: '{normalized_name}'): {e}", exc_info=True)
             raise PiperError(f"Unexpected error resolving variable: {e}") from e
 
+    # --- _fetch_piper_sts_token ---
     def _fetch_piper_sts_token(self, credential_ids: List[str], instance_id_for_context: str) -> Dict[str, Any]:
         if not credential_ids or not isinstance(credential_ids, list): raise ValueError("credential_ids must be a non-empty list.")
         cleaned_credential_ids = [str(cid).strip() for cid in credential_ids if str(cid).strip()]
@@ -401,7 +417,7 @@ class PiperClient:
                 raise PiperError("Invalid response from get_scoped_credentials (missing access_token or granted_credential_ids).", error_details=scoped_data)
 
             requested_set = set(cleaned_credential_ids); granted_set = set(scoped_data.get('granted_credential_ids', []))
-            if not granted_set: # If no IDs were granted at all
+            if not granted_set:
                  logger.error(f"Piper returned no granted_credential_ids for instance {instance_id_for_context} (requested: {cleaned_credential_ids}). This implies a permission issue for all requested IDs.")
                  raise PiperForbiddenError(f"Permission effectively denied for all requested credential_ids: {cleaned_credential_ids}", status_code=response.status_code, error_code='permission_denied_for_all_ids', error_details=scoped_data)
 
@@ -423,7 +439,7 @@ class PiperClient:
             logger.error(f"Unexpected error getting scoped creds by ID for instance {instance_id_for_context}: {e}", exc_info=True)
             raise PiperError(f"Unexpected error getting scoped creds: {e}") from e
 
-
+    # --- get_secret ---
     def get_secret(self,
                    variable_name: str,
                    piper_link_instance_id_for_call: Optional[str] = None,
@@ -447,11 +463,11 @@ class PiperClient:
                 missing_reason_parts = []
                 if piper_link_instance_id_for_call: missing_reason_parts.append("provided to get_secret()")
                 if self._configured_instance_id: missing_reason_parts.append("provided at PiperClient initialization")
-                if not missing_reason_parts : missing_reason_parts.append("discovered via Piper Link service") # Corrected this line, was if not missing_reason_parts :
+                if not missing_reason_parts: missing_reason_parts.append("discovered via Piper Link service")
                 raise PiperLinkNeededError(f"Piper Link instanceId is required but was not ({' or '.join(missing_reason_parts)}) or discovery failed.")
 
             logger.info(f"Attempting to retrieve secret for '{original_variable_name_for_grant_link}' via Piper (instance: {effective_instance_id}).")
-            credential_id = self._resolve_piper_variable(original_variable_name_for_grant_link, effective_instance_id) # Pass original name
+            credential_id = self._resolve_piper_variable(original_variable_name_for_grant_link, effective_instance_id)
             piper_sts_response_data = self._fetch_piper_sts_token([credential_id], effective_instance_id)
 
             initial_piper_response = {
@@ -475,9 +491,9 @@ class PiperClient:
 
         if fetch_raw_secret and initial_piper_response and initial_piper_response.get('source') == 'piper_sts':
             logger.info(f"Raw secret requested for '{original_variable_name_for_grant_link}'. Attempting to exchange STS token.")
-            if not self.exchange_secret_url:
-                logger.error("SDK_CONFIG_ERROR: Cannot fetch raw secret. 'exchange_secret_url' is not configured in PiperClient.")
-                raise PiperConfigError("Raw secret fetch requested, but 'exchange_secret_url' is not configured in PiperClient.")
+            if not self.exchange_secret_url: # This check is now more critical if it's not defaulted or if default is None
+                logger.error("SDK_CONFIG_ERROR: Cannot fetch raw secret. 'exchange_secret_url' is not configured or defaulted in PiperClient.")
+                raise PiperConfigError("Raw secret fetch requested, but 'exchange_secret_url' is not available in PiperClient.")
 
             try:
                 piper_credential_id_for_exchange = initial_piper_response.get('piper_credential_id')
@@ -533,7 +549,7 @@ class PiperClient:
 
         env_var_to_check = fallback_env_var_name
         if not env_var_to_check:
-            if self.env_variable_map and original_variable_name_for_grant_link in self.env_variable_map: # Use original name for map
+            if self.env_variable_map and original_variable_name_for_grant_link in self.env_variable_map:
                 env_var_to_check = self.env_variable_map[original_variable_name_for_grant_link]
             else:
                 normalized_for_env = original_variable_name_for_grant_link.upper().replace(' ', '_').replace('-', '_')
@@ -546,7 +562,7 @@ class PiperClient:
 
         if secret_value_from_env:
             logger.info(f"Successfully retrieved secret from environment variable '{env_var_to_check}'.")
-            return { # <<<< INDENTATION ERROR WAS HERE
+            return {
                 "value": secret_value_from_env, "source": "environment_variable",
                 "env_var_name_found": env_var_to_check, "token_type": "DirectValue", "expires_in": None
             }
@@ -554,11 +570,14 @@ class PiperClient:
             logger.warning(f"Fallback failed: Environment variable '{env_var_to_check}' not set for Piper variable '{original_variable_name_for_grant_link}'.")
             if piper_error_encountered:
                 original_piper_error_message = str(piper_error_encountered)
-                combined_message = f"{original_piper_error_message.splitlines()[0]}. Also, fallback environment variable '{env_var_to_check}' was not found."
+                # Ensure splitlines()[0] doesn't error if original_piper_error_message is empty or has no newlines
+                first_line_original_error = original_piper_error_message.splitlines()[0] if original_piper_error_message and '\n' in original_piper_error_message else original_piper_error_message
+                
+                combined_message = f"{first_line_original_error}. Also, fallback environment variable '{env_var_to_check}' was not found."
 
                 if isinstance(piper_error_encountered, PiperGrantNeededError):
                     raise PiperGrantNeededError(
-                        message=combined_message,
+                        message=combined_message, # Use the combined message
                         status_code=piper_error_encountered.status_code,
                         error_code=piper_error_encountered.error_code,
                         error_details=piper_error_encountered.error_details,
@@ -567,22 +586,25 @@ class PiperClient:
                         piper_ui_grant_url_template=piper_error_encountered.piper_ui_grant_url_template
                     ) from piper_error_encountered
                 elif hasattr(piper_error_encountered, 'status_code') and hasattr(piper_error_encountered, 'error_code'):
+                     # For other PiperAuthError-like errors, just append to the full original string representation
                      raise type(piper_error_encountered)(f"{original_piper_error_message}. Additionally, fallback environment variable '{env_var_to_check}' was not found.",
                                                           status_code=getattr(piper_error_encountered,'status_code'),
                                                           error_code=getattr(piper_error_encountered,'error_code'),
                                                           error_details=getattr(piper_error_encountered,'error_details')) from piper_error_encountered
-                else:
+                else: # For PiperConfigError, PiperLinkNeededError, base PiperError
                     raise type(piper_error_encountered)(f"{original_piper_error_message}. Additionally, fallback environment variable '{env_var_to_check}' was not found.") from piper_error_encountered
             else:
                 raise PiperConfigError(f"Could not retrieve credentials for '{original_variable_name_for_grant_link}'. Piper context could not be established AND environment variable '{env_var_to_check}' is not set.")
 
+    # --- get_credential_id_for_variable ---
     def get_credential_id_for_variable(self, variable_name: str, piper_link_instance_id_for_call: Optional[str] = None) -> str:
         logger.warning("get_credential_id_for_variable is an advanced method; prefer get_secret().")
         target_instance_id = self._get_instance_id_for_api_call(piper_link_instance_id_for_call)
         if not target_instance_id:
             raise PiperLinkNeededError("Instance ID required for resolving variable (neither provided nor discovered).")
-        return self._resolve_piper_variable(variable_name, target_instance_id) # Pass original variable name
+        return self._resolve_piper_variable(variable_name, target_instance_id)
 
+    # --- get_scoped_credentials_by_id ---
     def get_scoped_credentials_by_id(self, credential_ids: List[str], piper_link_instance_id_for_call: Optional[str] = None) -> Dict[str, Any]:
         logger.warning("get_scoped_credentials_by_id is an advanced method; prefer get_secret().")
         target_instance_id = self._get_instance_id_for_api_call(piper_link_instance_id_for_call)
