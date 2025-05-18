@@ -15,7 +15,7 @@ downloads/
 eggs/
 .eggs/
 lib/
-lib64/
+lib60/
 parts/
 sdist/
 var/
@@ -28,7 +28,8 @@ share/python-wheels/
 MANIFEST
 
 # PyInstaller
-*.manifest
+# Обычно эти файлы хранятся в build / <имя_скрипта>
+# Для однофайлового режима также может быть dist /
 *.spec
 
 # Installer logs
@@ -49,7 +50,29 @@ coverage.xml
 .hypothesis/
 .pytest_cache/
 
-# Environments
+# Translations
+*.mo
+*.pot
+
+# Django stuff:
+*.log
+local_settings.py
+db.sqlite3
+db.sqlite3-journal
+
+# Flask stuff:
+instance/
+.webassets-cache
+
+# Scrapy stuff:
+.scrapy
+.pypirc
+
+# Sphinx documentation
+docs/_build/
+doc/_build/
+
+# Virtual environments
 .env
 .venv
 env/
@@ -57,6 +80,8 @@ venv/
 ENV/
 env.bak/
 venv.bak/
+venv_piper_tests/ # YOUR SPECIFIC VENV NAME
+pyper-sdk-env/   # OLDER VENV NAME IF PRESENT
 
 # Spyder project settings
 .spyderproject
@@ -73,25 +98,63 @@ venv.bak/
 .dmypy.json
 dmypy.json
 
+# Pyre type checker
+.pyre/
+
+# pytype
+.pytype/
+
+# Cython debug symbols
+cython_debug/
+
+# VS Code
+.vscode/*
+!.vscode/settings.json
+!.vscode/tasks.json
+!.vscode/launch.json
+!.vscode/extensions.json
+*.code-workspace
+
+# Sublime Text
+*.sublime-project
+*.sublime-workspace
+
+# JetBrains / PyCharm
+.idea/
+*.iws
+*.iml
+out/
+
+# Eclipse
+.project
+.pydevproject
+.settings/
+
+# Netbeans
+/nbproject/
+
+# pyright
+.pyrightconfig.json
+
+# OS generated files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# Personal / Sensitive - good to have as a reminder
+# *.env
+# secrets.json # Be careful if you have actual secrets files
+# credentials.yaml
+# .aws/
+
 # Jupyter Notebook
 .ipynb_checkpoints
 
-# IDE related
-.idea/
-.vscode/
+# Temp files
+*.tmp
 *.swp
-*.swo
 *~
-
-# OSX / Windows specific
-.DS_Store
-Thumbs.db
-
-# Secrets! Never commit secrets.
-*.env
-secrets.yaml
-secrets.json
-*_secret*.py
-
-.pypirc
-venv_sdk/
