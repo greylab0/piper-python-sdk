@@ -6,13 +6,14 @@ from .client import (
     PiperConfigError,
     PiperLinkNeededError,
     PiperAuthError,
-    PiperGrantError, # Added
-    PiperGrantNeededError, # Now inherits from PiperGrantError
-    PiperForbiddenError, # Added
-    PiperRawSecretExchangeError 
+    PiperGrantError,
+    PiperGrantNeededError,
+    PiperForbiddenError,
+    PiperRawSecretExchangeError,
+    PiperSecretAcquisitionError # <-- ADDED
 )
 
-__version__ = "0.4.4" # <-- UPDATE THIS
+__version__ = "0.5.0" # <-- UPDATED
 
 __all__ = [
     "PiperClient",
@@ -24,5 +25,6 @@ __all__ = [
     "PiperGrantNeededError",
     "PiperForbiddenError",
     "PiperRawSecretExchangeError",
+    "PiperSecretAcquisitionError", # <-- ADDED
     "__version__"
 ]
