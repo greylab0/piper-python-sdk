@@ -13,7 +13,7 @@ from .client import (
     PiperSecretAcquisitionError # <-- ADDED
 )
 
-__version__ = "0.5.0" # <-- UPDATED
+__version__ = "0.6.0" # <-- UPDATED
 
 __all__ = [
     "PiperClient",

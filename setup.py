@@ -2,13 +2,13 @@ import setuptools
 
 setuptools.setup(
     name="pyper-sdk",  # The pip install name
-    version="0.5.0",
+    version="0.6.0",
     author="Piper",
     author_email="devs@agentpiper.com",
-    description="Python SDK for Piper Agent Credential Management with environment fallback.", # Update description
+    description="Python SDK for Piper Agent Credential Management. Secure, flexible, and simple.",
     long_description=open('README.md').read(),
     long_description_content_type="text/markdown",
-    url="https://github.com/greylab0/piper-python-sdk", # Your GitHub repo
+    url="https://github.com/greylab0/piper-python-sdk",
     
     # This line tells setuptools to find the 'piper_sdk' directory
     # and package it as the 'piper_sdk' module.
@@ -28,7 +28,7 @@ setuptools.setup(
         "Programming Language :: Python :: 3.9",
         "Programming Language :: Python :: 3.10",
         "Programming Language :: Python :: 3.11",
-        "License :: OSI Approved :: MIT License", # Or your chosen SPDX identifier
+        "License :: OSI Approved :: MIT License",
         "Operating System :: OS Independent",
         "Development Status :: 4 - Beta", # Updated status
         "Intended Audience :: Developers",
