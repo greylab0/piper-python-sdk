@@ -2,7 +2,7 @@ import setuptools
 
 setuptools.setup(
     name="pyper-sdk",  # The pip install name
-    version="0.6.0",
+    version="0.7.0",
     author="Piper",
     author_email="devs@agentpiper.com",
     description="Python SDK for Piper Agent Credential Management. Secure, flexible, and simple.",
@@ -10,15 +10,11 @@ setuptools.setup(
     long_description_content_type="text/markdown",
     url="https://github.com/greylab0/piper-python-sdk",
     
-    # This line tells setuptools to find the 'piper_sdk' directory
-    # and package it as the 'piper_sdk' module.
     packages=setuptools.find_packages(where=".", include=['piper_sdk*']),
-    # If you only have one top-level package, you can also do:
-    # packages=['piper_sdk'], 
 
     install_requires=[
         "requests>=2.20.0",
-        # "keyring>=23.0.0", # Only if SDK directly uses keyring, currently it doesn't
+        # "keyring>=23.0.0", # Currently not supported
     ],
     python_requires='>=3.7',
     classifiers=[
