@@ -12,11 +12,11 @@ Empower your Python applications to securely use your users' API keys and creden
 
 *   🔄 **Flexible Context Handling:** Supports automatic local context detection via the Piper Link desktop app (for users interacting directly) and explicit context IDs for remote or non-interactive services.
 
-*   🧩 **Graceful Fallbacks & User Guidance (Enhanced in v0.7.0):**
+*   🧩 **Graceful Fallbacks & User Guidance (Enhanced in v0.7.1):**
     *   Built-in, configurable fallbacks to environment variables and local agent configuration files ensure your application remains functional even if Piper is not used or encounters an issue.
-    *   **New in v0.7.0:** The SDK now enables more resilient applications by allowing non-raising secret acquisition and provides methods to generate user-friendly, actionable advice to help users resolve configuration problems (like missing grants or disconnected Piper Link).
+    *   **New in v0.7.1:** The SDK now enables more resilient applications by allowing non-raising secret acquisition and provides methods to generate user-friendly, actionable advice to help users resolve configuration problems (like missing grants or disconnected Piper Link).
 
-🔁 **Core Flow (with Pyper SDK v0.7.0+)**
+🔁 **Core Flow (with Pyper SDK v0.7.1+)**
 
 1.  **User Setup (Handled by Piper System, if used):**
     *   Users store their secrets (e.g., API keys) in their secure Piper account.
@@ -55,7 +55,7 @@ Empower your Python applications to securely use your users' API keys and creden
                 print("PiperClient ready.")
             else:
                 print("ERROR: PiperClient did not initialize correctly. Cannot fetch secrets reliably.")
-                # Get advice for the initialization error (v0.7.0+)
+                # Get advice for the initialization error (v0.7.1+)
                 init_advice = piper.get_resolution_advice("") # Empty var_name for init errors
                 if init_advice:
                     print("\nClient Initialization Problem:\n", init_advice)
@@ -72,7 +72,7 @@ Empower your Python applications to securely use your users' API keys and creden
 
         3.  Local Agent Configuration File (if `fallback_to_local_config=True` and previous tiers skipped or failed)
 
-    *   **Handle Secret Info or Failures (v0.7.0+):**
+    *   **Handle Secret Info or Failures (v0.7.1+):**
 
         ```python
         # Assuming piper client was initialized successfully (piper.client_initialization_ok was True)
@@ -89,7 +89,7 @@ Empower your Python applications to securely use your users' API keys and creden
                 # str(e) is very informative for logs:
                 print("Detailed Error:\n", e) 
                 
-                # For more user-friendly advice (v0.7.0+):
+                # For more user-friendly advice (v0.7.1+):
                 advice = piper.get_resolution_advice(e.variable_name, error_object=e)
                 if advice:
                     print("\nUser Advice to resolve CRITICAL_API_KEY issue:\n", advice)
@@ -98,7 +98,7 @@ Empower your Python applications to securely use your users' API keys and creden
                  print(f"CRITICAL SDK CONFIG ERROR during get_secret: {e}")
 
 
-            # --- Option 2: Non-raising behavior (good for non-critical secrets or deferring errors - v0.7.0+) ---
+            # --- Option 2: Non-raising behavior (good for non-critical secrets or deferring errors - v0.7.1+) ---
             db_pass_info = piper.get_secret("DATABASE_PASSWORD", fetch_raw_secret=True, raise_on_failure=False)
             
             if db_pass_info and db_pass_info.get("value"):
@@ -123,9 +123,9 @@ Empower your Python applications to securely use your users' API keys and creden
                     print("  Could not determine specific reason for DATABASE_PASSWORD failure from SDK (no error object found).")
         ```
 
-✨ **Graceful Startup & User Guidance (New in v0.7.0)**
+✨ **Graceful Startup & User Guidance (New in v0.7.1)**
 
-Pyper SDK v0.7.0 introduces powerful features to help your application start up smoothly even if secrets aren't immediately available, and to provide clear, actionable guidance to your users:
+Pyper SDK v0.7.1 introduces powerful features to help your application start up smoothly even if secrets aren't immediately available, and to provide clear, actionable guidance to your users:
 
 *   ✅ **Non-Raising Secret Acquisition:** The `piper.get_secret()` method now accepts a `raise_on_failure=False` parameter. When set, instead of raising an exception, it returns a detailed dictionary upon failure, allowing your application to continue running and handle the missing secret gracefully (e.g., at the point a feature requiring it is used).
 
@@ -170,7 +170,7 @@ The `PiperClient` can be initialized with the following parameters to fine-tune 
 
 **(Note:** For developers needing to point the SDK at alternative backend service URLs for testing or specialized deployments, additional override parameters are available in the `PiperClient` constructor. These are not typically needed for general use and can be found by inspecting the `PiperClient.__init__` signature in the source code.)
 
-**Key `PiperClient` Attributes & Methods (v0.7.0+):**
+**Key `PiperClient` Attributes & Methods (v0.7.1+):**
 
 *   `piper.client_initialization_ok: bool`: (Read-only attribute) After `PiperClient(...)`, check this. `True` if critical configurations were met, `False` otherwise (e.g., missing `client_id`).
 
@@ -185,6 +185,25 @@ The `PiperClient` can be initialized with the following parameters to fine-tune 
     - Else (e.g., if `variable_name` is `""`), it uses any stored client initialization error.
     Returns `None` if no relevant error is found.
 
+**Advanced Usage: Dynamic Grant & Context Handling (v0.7.1+)**
+
+For applications requiring more dynamic responses to changes in user grants or Piper Link context without restarting, the following methods can be utilized:
+
+*   `piper.is_grant_still_active(variable_name: str, ...) -> bool`:
+    Proactively checks if a specific grant for `variable_name` is still active in the Piper system. This involves a lightweight call to the backend. It's useful for validating a previously fetched secret before use, especially if external grant revocations are possible.
+    - Returns `True` if the grant is active, `False` otherwise.
+    - If the grant is found to be inactive and `store_error_if_inactive=True` (default), it updates the internal error state for that variable, allowing `get_resolution_advice()` to provide accurate, current guidance.
+
+*   `piper.clear_last_error_for_variable(variable_name: str) -> None`:
+    Manually clears any stored error for a `variable_name` that might have been cached from a previous `get_secret(..., raise_on_failure=False)` call or `is_grant_still_active()`. This is useful before a deliberate re-attempt to fetch a secret, ensuring that any subsequent advice is based on the very latest attempt.
+
+*   `piper.clear_cached_instance_id() -> None`:
+    Clears the `instanceId` cached by the SDK from a previous local Piper Link discovery. If you anticipate the Piper Link application might have been restarted or the user's session within it changed, call this method to force the SDK to re-discover the `instanceId` on the next operation that requires it (and has `attempt_local_discovery=True`).
+
+Using these methods, an application can build more sophisticated logic to handle scenarios like:
+- Checking if a grant was revoked before using a cached secret, and then guiding the user to re-grant.
+- Allowing a user to explicitly trigger a "refresh secrets" or "retry connection" action that clears stale state and attempts a fresh acquisition.
+
 🌐 **User Context (`instanceId`) for Piper Tier**
 
 When using the Piper system, a user context (`instanceId`) is needed:
@@ -193,7 +212,7 @@ When using the Piper system, a user context (`instanceId`) is needed:
 
 *   **Automatic Local Discovery:** If no explicit `instanceId` is active for a call, and `attempt_local_discovery=True` (default), the SDK queries the Piper Link GUI's local endpoint (typically `http://localhost:31477/piper-link-context`) to get the current `instanceId`. This is ideal for desktop applications where the user interacts with Piper Link.
 
-🧯 **Error Handling (Enhanced in v0.7.0)**
+🧯 **Error Handling (Enhanced in v0.7.1)**
 
 The SDK provides robust error information:
 
@@ -204,14 +223,14 @@ The SDK provides robust error information:
 
     *   Other errors like `PiperConfigError` (for SDK setup issues found during a call) or more specific `PiperAuthError` subtypes might be raised directly from the Piper tier if they occur before all tiers are exhausted.
 
-*   **`get_secret(..., raise_on_failure=False)` (New in v0.7.0):**
+*   **`get_secret(..., raise_on_failure=False)` (New in v0.7.1):**
     *   If an error occurs (client initialization issue passed down, configuration problem during the call, or secret acquisition failure across tiers), this mode does *not* raise an exception.
     
     *   Instead, it returns a dictionary containing details about the failure, including an `error_object` key holding the actual `PiperError` instance (e.g., `PiperSecretAcquisitionError`, `PiperConfigError`). The dictionary also includes `value: None`, `source` (e.g., "client\_initialization\_failure", "piper\_grant\_needed"), and `variable_name`.
 
     *   The error is also stored internally and can be retrieved using `piper.get_last_error_for_variable(variable_name)`.
 
-*   **`get_resolution_advice(variable_name, error_object?)` (New in v0.7.0):**
+*   **`get_resolution_advice(variable_name, error_object?)` (New in v0.7.1):**
     *   Use this method to convert an error object into a user-friendly, actionable string. This is the **recommended way to generate messages for your users** when `get_secret` (non-raising) indicates a failure, or if `piper.client_initialization_ok` is `False`.
 
 **Key Error Types you might interact with:**
