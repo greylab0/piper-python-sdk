@@ -319,5 +319,164 @@ class TestPiperClientGracefulFeatures(unittest.TestCase): # Some tests updated
         self.assertIn("The Piper Link application needs to be connected.", advice) # type: ignore
         self.assertNotIn("client_id is required", advice) # type: ignore
 
+
+    # --- Tests for clear_cached_instance_id ---
+    def test_clear_cached_instance_id_clears_discovered_id(self):
+        # Simulate a discovered ID being cached
+        self.client._discovered_instance_id = "cached_instance_id_to_clear"
+        self.client.clear_cached_instance_id()
+        self.assertIsNone(self.client._discovered_instance_id)
+
+    def test_clear_cached_instance_id_no_id_to_clear(self):
+        self.client._discovered_instance_id = None # Ensure it's None
+        self.client.clear_cached_instance_id() # Should not error
+        self.assertIsNone(self.client._discovered_instance_id)
+
+    def test_clear_cached_instance_id_does_not_clear_configured_id(self):
+        configured_id = "explicitly_configured_id"
+        client_with_config_id = PiperClient(client_id=self.client_id, piper_link_instance_id=configured_id)
+        client_with_config_id._discovered_instance_id = "some_discovered_id" # Should not happen if configured_id is set, but for test
+        
+        client_with_config_id.clear_cached_instance_id()
+        
+        self.assertEqual(client_with_config_id._configured_instance_id, configured_id) # Configured ID should remain
+        self.assertIsNone(client_with_config_id._discovered_instance_id) # Discovered should be cleared
+
+
+    # --- Tests for clear_last_error_for_variable ---
+    def test_clear_last_error_for_variable_clears_existing_error(self):
+        error_key = self.variable_name
+        mock_error = PiperError("Test error")
+        self.client._last_get_secret_errors[error_key] = mock_error
+        
+        self.client.clear_last_error_for_variable(self.variable_name)
+        self.assertNotIn(error_key, self.client._last_get_secret_errors)
+        self.assertIsNone(self.client.get_last_error_for_variable(self.variable_name))
+
+    def test_clear_last_error_for_variable_no_existing_error(self):
+        # Ensure no error exists for this variable
+        self.client._last_get_secret_errors.pop(self.variable_name, None) 
+        
+        self.client.clear_last_error_for_variable(self.variable_name) # Should not error
+        self.assertIsNone(self.client.get_last_error_for_variable(self.variable_name))
+
+    def test_clear_last_error_for_variable_with_stripping(self):
+        error_key = self.variable_name # "GRACEFUL_VAR"
+        padded_var_name = f"  {self.variable_name}  "
+        mock_error = PiperError("Test error for padded var")
+        self.client._last_get_secret_errors[error_key] = mock_error
+        
+        self.client.clear_last_error_for_variable(padded_var_name)
+        self.assertNotIn(error_key, self.client._last_get_secret_errors)
+
+    def test_clear_last_error_for_variable_special_keys(self):
+        # Test clearing for special keys used by get_secret input validation
+        non_string_key = "INPUT_VALIDATION_NON_STRING_VAR_NAME"
+        empty_string_key = "" # Key for empty string after strip
+
+        self.client._last_get_secret_errors[non_string_key] = PiperConfigError("non-string")
+        self.client._last_get_secret_errors[empty_string_key] = PiperConfigError("empty")
+
+        self.client.clear_last_error_for_variable("INPUT_VALIDATION_NON_STRING_VAR_NAME")
+        self.assertNotIn(non_string_key, self.client._last_get_secret_errors)
+
+        self.client.clear_last_error_for_variable("")
+        self.assertNotIn(empty_string_key, self.client._last_get_secret_errors)
+
+    def test_clear_last_error_for_variable_non_string_input(self):
+        # Method should handle non-string input gracefully (logs warning, does nothing)
+        self.client.clear_last_error_for_variable(None) # type: ignore
+        self.client.clear_last_error_for_variable(123) # type: ignore
+        # No assertion needed other than it doesn't crash
+
+
+    # --- Tests for is_grant_still_active ---
+    @patch('requests.Session.post')
+    @patch('piper_sdk.client.PiperClient.discover_local_instance_id')
+    def test_is_grant_still_active_success(self, mock_discover_id, mock_post):
+        mock_discover_id.return_value = self.instance_id
+        mock_resolve_resp = mock_response(200, {"credentialId": self.credential_id})
+        mock_post.return_value = mock_resolve_resp
+
+        # Pre-load an error to ensure it gets cleared on active grant
+        self.client._last_get_secret_errors[self.variable_name] = PiperError("Old error")
+
+        is_active = self.client.is_grant_still_active(self.variable_name)
+        self.assertTrue(is_active)
+        mock_post.assert_called_once()
+        self.assertEqual(mock_post.call_args[0][0], self.client.resolve_mapping_url)
+        self.assertEqual(mock_post.call_args[1]['json']['variableName'], self.normalized_variable_name)
+        self.assertIsNone(self.client.get_last_error_for_variable(self.variable_name)) # Error should be cleared
+
+
+    @patch('requests.Session.post')
+    @patch('piper_sdk.client.PiperClient.discover_local_instance_id')
+    def test_is_grant_still_active_grant_needed_stores_error(self, mock_discover_id, mock_post):
+        mock_discover_id.return_value = self.instance_id
+        mock_resolve_fail_resp = mock_response(404, {"error": "mapping_not_found", "message": "Grant gone"})
+        mock_post.return_value = mock_resolve_fail_resp
+        
+        is_active = self.client.is_grant_still_active(self.variable_name, store_error_if_inactive=True)
+        self.assertFalse(is_active)
+        stored_error = self.client.get_last_error_for_variable(self.variable_name)
+        self.assertIsInstance(stored_error, PiperGrantNeededError)
+        self.assertEqual(stored_error.variable_name_requested, self.variable_name) # type: ignore
+
+    @patch('requests.Session.post')
+    @patch('piper_sdk.client.PiperClient.discover_local_instance_id')
+    def test_is_grant_still_active_grant_needed_no_store_error(self, mock_discover_id, mock_post):
+        mock_discover_id.return_value = self.instance_id
+        mock_resolve_fail_resp = mock_response(404, {"error": "mapping_not_found", "message": "Grant gone"})
+        mock_post.return_value = mock_resolve_fail_resp
+        
+        is_active = self.client.is_grant_still_active(self.variable_name, store_error_if_inactive=False)
+        self.assertFalse(is_active)
+        self.assertIsNone(self.client.get_last_error_for_variable(self.variable_name)) # Error should NOT be stored
+
+    @patch('piper_sdk.client.PiperClient.discover_local_instance_id')
+    def test_is_grant_still_active_link_needed_raises_and_stores_error(self, mock_discover_id):
+        mock_discover_id.side_effect = PiperLinkNeededError("Link down for grant check")
+        self.client._configured_instance_id = None # Ensure discovery is attempted
+
+        with self.assertRaises(PiperLinkNeededError):
+            self.client.is_grant_still_active(self.variable_name, store_error_if_inactive=True)
+        
+        stored_error = self.client.get_last_error_for_variable(self.variable_name)
+        self.assertIsInstance(stored_error, PiperLinkNeededError)
+
+    @patch('requests.Session.post')
+    @patch('piper_sdk.client.PiperClient.discover_local_instance_id')
+    def test_is_grant_still_active_api_error_returns_false_stores_error(self, mock_discover_id, mock_post):
+        mock_discover_id.return_value = self.instance_id
+        # Simulate a 500 error from the resolve GCF
+        mock_resolve_server_error_resp = mock_response(500, text_data="Internal Server Error")
+        mock_post.return_value = mock_resolve_server_error_resp
+
+        is_active = self.client.is_grant_still_active(self.variable_name, store_error_if_inactive=True)
+        self.assertFalse(is_active) # Should return False on API error
+        stored_error = self.client.get_last_error_for_variable(self.variable_name)
+        self.assertIsInstance(stored_error, PiperError) # Will be a generic PiperError wrapping the HTTP error
+        self.assertNotIn(type(stored_error), [PiperGrantNeededError, PiperLinkNeededError]) # Ensure it's not misidentified
+
+
+    def test_is_grant_still_active_client_not_initialized_raises(self):
+        bad_client = PiperClient(client_id=None) # type: ignore
+        with self.assertRaisesRegex(PiperConfigError, "PiperClient critical configuration error: client_id is required."):
+            bad_client.is_grant_still_active(self.variable_name)
+
+    def test_is_grant_still_active_use_piper_false(self):
+        no_piper_client = PiperClient(client_id=self.client_id, use_piper=False)
+        is_active = no_piper_client.is_grant_still_active(self.variable_name)
+        self.assertTrue(is_active) # Optimistic return
+
+    def test_is_grant_still_active_invalid_var_name_raises(self):
+        with self.assertRaisesRegex(PiperConfigError, "variable_name must be a string"):
+            self.client.is_grant_still_active(None) # type: ignore
+        with self.assertRaisesRegex(PiperConfigError, "variable_name cannot be empty"):
+            self.client.is_grant_still_active("   ")
+
+
+# ... (Rest of TestPiperClientGracefulFeatures and TestPiperClientRegression) ...
+
 if __name__ == '__main__':
     unittest.main(argv=['first-arg-is-ignored'], exit=False)

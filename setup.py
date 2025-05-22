@@ -2,7 +2,7 @@ import setuptools
 
 setuptools.setup(
     name="pyper-sdk",  # The pip install name
-    version="0.7.0",
+    version="0.7.1",
     author="Piper",
     author_email="devs@agentpiper.com",
     description="Python SDK for Piper Agent Credential Management. Secure, flexible, and simple.",

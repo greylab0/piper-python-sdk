@@ -55,7 +55,7 @@ class PiperGrantError(PiperAuthError):
                 params = {
                     'response_type': 'code',
                     'scope': 'manage_grants', 
-                    'client': self.agent_id_for_grant,
+                    'client': self.agent_id_for_grant, 
                     'variable': self.variable_name_requested 
                 }
                 self.constructed_grant_url = f"{base_url}?{urlencode(params, quote_via=_quote_plus)}"
@@ -115,7 +115,7 @@ class PiperClient:
     DEFAULT_PIPER_RESOLVE_MAPPING_URL = f"https://piper-resolve-variable-mapping-{DEFAULT_PROJECT_ID}.{DEFAULT_REGION}.run.app"
     DEFAULT_PIPER_EXCHANGE_SECRET_URL = f"https://piper-exchange-sts-for-secret-{DEFAULT_PROJECT_ID}.{DEFAULT_REGION}.run.app"
     DEFAULT_PIPER_LINK_SERVICE_URL = "http://localhost:31477/piper-link-context"
-    DEFAULT_PIPER_UI_BASE_URL = "https://agentpiper.com/secrets" # Default base for grant UI
+    DEFAULT_PIPER_UI_BASE_URL = "https://agentpiper.com/secrets" 
     
     def __init__(self,
                  client_id: str,
@@ -134,13 +134,13 @@ class PiperClient:
                  env_variable_map: Optional[Dict[str, str]] = None,
                  fallback_to_local_config: bool = False,
                  local_config_file_path: Optional[str] = None,
-                 piper_ui_grant_page_url: Optional[str] = None # User can override the base URL
+                 piper_ui_grant_page_url: Optional[str] = None 
                 ):
         self._initialization_error: Optional[PiperConfigError] = None
         self.client_initialization_ok: bool = True
         self._last_get_secret_errors: Dict[str, PiperError] = {}
 
-        if not client_id: # type: ignore 
+        if not client_id: 
             init_err_msg = "PiperClient critical configuration error: client_id is required."
             logger.critical(init_err_msg)
             self._initialization_error = PiperConfigError(init_err_msg)
@@ -177,7 +177,7 @@ class PiperClient:
                  logger.warning(f"Piper Link Service URL ('{self.piper_link_service_url}') is not the default localhost URL and does not start with http://localhost. This is unusual for local discovery.")
 
         self._session = requests_session if requests_session else requests.Session()
-        sdk_version = "0.7.0-dev" 
+        sdk_version = "0.7.0-dev" # Or "0.7.1-dev" if these are post-0.7.0
         self._session.headers.update({'User-Agent': f'Pyper-SDK/{sdk_version}'})
         self._configured_instance_id: Optional[str] = piper_link_instance_id
         self._discovered_instance_id: Optional[str] = None 
@@ -459,15 +459,15 @@ class PiperClient:
         _error_key_for_this_call: Optional[str] = None 
         if not isinstance(variable_name, str):
             err = PiperConfigError("variable_name must be a string, not None or other type.")
-            _error_key_for_this_call = "INPUT_VALIDATION_NON_STRING_VAR_NAME" # Fixed key
+            _error_key_for_this_call = "INPUT_VALIDATION_NON_STRING_VAR_NAME" 
             self._last_get_secret_errors[_error_key_for_this_call] = err
             if raise_on_failure: raise err
             return {"value": None, "source": "config_error_input_type", "variable_name": _error_key_for_this_call, "error_object": err }
 
         original_variable_name_stripped = variable_name.strip()
-        if not original_variable_name_stripped: # Handles "" and "   "
+        if not original_variable_name_stripped:
             err = PiperConfigError("variable_name cannot be empty or all whitespace after stripping.")
-            _error_key_for_this_call = original_variable_name_stripped # Key will be ""
+            _error_key_for_this_call = original_variable_name_stripped 
             self._last_get_secret_errors[_error_key_for_this_call] = err 
             if raise_on_failure: raise err
             return {"value": None, "source": "config_error_input_empty", "variable_name": _error_key_for_this_call, "error_object": err}
@@ -494,12 +494,10 @@ class PiperClient:
             else:
                 logger.warning(f"GET_SECRET '{error_key_for_storage}': Acquisition failed. Storing error and returning failure dict as raise_on_failure=False. Error: {type(e).__name__} - {str(e).splitlines()[0]}")
                 failure_source = "acquisition_failure" 
-                # Updated logic to correctly identify specific failure source from PSAE
                 if isinstance(e, PiperSecretAcquisitionError):
                     piper_tier_issue = e.attempted_sources_summary.get("Piper")
                     if isinstance(piper_tier_issue, PiperGrantNeededError): failure_source = "piper_grant_needed"
                     elif isinstance(piper_tier_issue, PiperLinkNeededError): failure_source = "piper_link_needed"
-                    # Potentially add more checks here for other Piper tier specific errors if needed for 'source'
                 elif isinstance(e, PiperGrantNeededError): failure_source = "piper_grant_needed"
                 elif isinstance(e, PiperLinkNeededError): failure_source = "piper_link_needed"
                 elif isinstance(e, PiperConfigError): failure_source = "config_error_runtime" 
@@ -511,11 +509,102 @@ class PiperClient:
             if raise_on_failure: raise wrapped_error
             else: return {"value": None, "source": "unexpected_sdk_error", "variable_name": error_key_for_storage, "error_object": wrapped_error}
 
+    def clear_cached_instance_id(self) -> None:
+        """
+        Clears the cached discovered Piper Link instanceId.
+        This forces a fresh discovery attempt by discover_local_instance_id() 
+        on its next call (if local discovery is enabled and no instanceId is configured).
+        Useful if Piper Link might have been restarted or the user session changed.
+        """
+        if self._discovered_instance_id is not None:
+            logger.debug(f"Clearing cached discovered instanceId ('{self._discovered_instance_id}').")
+            self._discovered_instance_id = None
+        else:
+            logger.debug("No cached discovered instanceId to clear.")
+
+    def clear_last_error_for_variable(self, variable_name: str) -> None:
+        """
+        Clears any internally stored error associated with the given variable_name
+        that might have been set by a previous call to get_secret(raise_on_failure=False)
+        or by is_grant_still_active().
+        """
+        if not isinstance(variable_name, str):
+            logger.warning("clear_last_error_for_variable called with non-string variable_name. No action.")
+            return
+
+        key_to_clear: str
+        # Handle special keys that get_secret might use for validation failures
+        if variable_name == "INPUT_VALIDATION_NON_STRING_VAR_NAME":
+            key_to_clear = "INPUT_VALIDATION_NON_STRING_VAR_NAME"
+        else:
+            key_to_clear = variable_name.strip()
+            # If the original input was "" or "   ", the stripped key is "".
+            # If the original input was, say, None, get_secret would have used INPUT_VALIDATION_NON_STRING_VAR_NAME.
+            # This method expects the original user-facing variable_name or the special key.
+        
+        if key_to_clear in self._last_get_secret_errors:
+            del self._last_get_secret_errors[key_to_clear]
+            logger.debug(f"Cleared stored error for SDK error key '{key_to_clear}' (derived from input '{variable_name}').")
+        else:
+            logger.debug(f"No stored error found for SDK error key '{key_to_clear}' (derived from input '{variable_name}') to clear.")
+
+    def is_grant_still_active(self, variable_name: str, 
+                                piper_link_instance_id_for_call: Optional[str] = None,
+                                store_error_if_inactive: bool = True) -> bool:
+        logger.debug(f"is_grant_still_active called for variable: '{variable_name}'")
+        if not self.client_initialization_ok:
+            err_msg = "is_grant_still_active: PiperClient is not properly initialized."
+            logger.error(err_msg)
+            raise self._initialization_error or PiperConfigError(err_msg)
+        if not self.use_piper:
+            logger.debug("is_grant_still_active: Piper usage is disabled. Assuming grant 'active' or handled by non-Piper means.")
+            return True 
+        if not isinstance(variable_name, str) :
+            err = PiperConfigError("is_grant_still_active: variable_name must be a string.")
+            if store_error_if_inactive: self._last_get_secret_errors["INPUT_VALIDATION_NON_STRING_VAR_NAME"] = err # Use consistent key
+            raise err 
+        original_variable_name_stripped = variable_name.strip()
+        if not original_variable_name_stripped:
+            err = PiperConfigError("is_grant_still_active: variable_name cannot be empty or all whitespace after stripping.")
+            if store_error_if_inactive: self._last_get_secret_errors[original_variable_name_stripped] = err # Key is ""
+            raise err
+        
+        error_key_for_storage = original_variable_name_stripped
+        effective_instance_id: Optional[str] = None
+        try:
+            effective_instance_id = self._get_instance_id_for_api_call(piper_link_instance_id_for_call)
+            if not effective_instance_id:
+                link_error = PiperLinkNeededError("Instance ID required for grant check, but not available (discovery disabled or failed, and none provided).")
+                if store_error_if_inactive: self._last_get_secret_errors[error_key_for_storage] = link_error
+                raise link_error 
+        except PiperLinkNeededError as e_link_direct: 
+            if store_error_if_inactive: self._last_get_secret_errors[error_key_for_storage] = e_link_direct
+            raise 
+        try:
+            credential_id = self._resolve_piper_variable(original_variable_name_stripped, effective_instance_id)
+            logger.info(f"is_grant_still_active for '{original_variable_name_stripped}': Grant is ACTIVE (resolved to cred_id: {credential_id}).")
+            if error_key_for_storage in self._last_get_secret_errors: del self._last_get_secret_errors[error_key_for_storage]
+            return True
+        except PiperGrantNeededError as e_grant:
+            logger.info(f"is_grant_still_active for '{original_variable_name_stripped}': Grant is NOT active (mapping_not_found).")
+            if store_error_if_inactive: self._last_get_secret_errors[error_key_for_storage] = e_grant
+            return False
+        except (PiperAuthError, PiperForbiddenError, PiperError) as e_api:
+            logger.error(f"is_grant_still_active for '{original_variable_name_stripped}': API error during grant check: {type(e_api).__name__} - {e_api}")
+            if store_error_if_inactive: self._last_get_secret_errors[error_key_for_storage] = e_api
+            return False 
+        except ValueError as e_val: 
+             logger.error(f"is_grant_still_active for '{original_variable_name_stripped}': Value error during grant check: {e_val}")
+             err_obj = PiperConfigError(f"Invalid variable name for grant check: {e_val}")
+             if store_error_if_inactive: self._last_get_secret_errors[error_key_for_storage] = err_obj
+             # Re-raise as PiperConfigError to be consistent with other input validation
+             raise err_obj from e_val
+
+
     def get_last_error_for_variable(self, variable_name: str) -> Optional[PiperError]:
         if not isinstance(variable_name, str):
             logger.warning("get_last_error_for_variable called with non-string variable_name. Returning None.")
             return None
-        # Handle special keys used by get_secret's initial validation more directly
         if variable_name == "INPUT_VALIDATION_NON_STRING_VAR_NAME": 
             return self._last_get_secret_errors.get("INPUT_VALIDATION_NON_STRING_VAR_NAME")
         stripped_variable_name = variable_name.strip() 
@@ -528,12 +617,11 @@ class PiperClient:
 
         if isinstance(variable_name, str) and variable_name.strip():
             display_variable_name = variable_name.strip()
-        # Check if the var_name is one of the special keys from input validation
         elif variable_name == "INPUT_VALIDATION_NON_STRING_VAR_NAME":
             display_variable_name = "the provided variable name (invalid type)"
-        elif isinstance(variable_name, str) and not variable_name.strip() and variable_name != "": # All whitespace
+        elif isinstance(variable_name, str) and not variable_name.strip() and variable_name != "": 
             display_variable_name = "the provided variable name (all whitespace)"
-        elif variable_name == "": # Explicitly empty string
+        elif variable_name == "": 
              display_variable_name = "the provided variable name (empty string)"
         elif error_object and hasattr(error_object, 'variable_name') and getattr(error_object, 'variable_name'):
             display_variable_name = getattr(error_object, 'variable_name')
@@ -550,7 +638,6 @@ class PiperClient:
         
         if error_to_diagnose is None and isinstance(variable_name, str) : 
             error_to_diagnose = self.get_last_error_for_variable(variable_name) 
-            # display_variable_name already set based on input variable_name logic above
             
         if error_to_diagnose is None and self._initialization_error:
             error_to_diagnose = self._initialization_error
@@ -595,7 +682,7 @@ class PiperClient:
             env_fail_msg = summary.get("EnvironmentVariable")
             if env_fail_msg: 
                 advice_parts.append(f"  - Environment Variable Check: {env_fail_msg}")
-                if "not set" in env_fail_msg: actionable_advice_generated = True 
+                if "not set" in str(env_fail_msg): actionable_advice_generated = True # Make actionable if var not set
             local_config_key_prefix = "LocalConfigFile ("; local_config_fail_key = next((k for k in summary if k.startswith(local_config_key_prefix)), None)
             if local_config_fail_key:
                 local_fail_info = summary[local_config_fail_key]; path_in_key = local_config_fail_key[len(local_config_key_prefix):-1] 
@@ -619,7 +706,7 @@ class PiperClient:
             if error_to_diagnose.constructed_grant_url: advice_parts.append(f"    Please visit this URL to grant access: {error_to_diagnose.constructed_grant_url}")
             else: advice_parts.append(f"    Please use the Piper application or interface to grant access for client ID '{error_to_diagnose.agent_id_for_grant}' to variable '{error_to_diagnose.variable_name_requested}'.")
             actionable_advice_generated = True
-        elif isinstance(error_to_diagnose, PiperConfigError): 
+        elif isinstance(error_to_diagnose, PiperConfigError): # Catches other config errors
             advice_parts.append(f"  - Configuration Issue: {str(error_to_diagnose)}")
             actionable_advice_generated = True 
         elif isinstance(error_to_diagnose, PiperAuthError): 
@@ -636,8 +723,6 @@ class PiperClient:
             advice_parts.append("Once this is resolved, please try your request again.")
         elif len(advice_parts) > 1: 
             advice_parts.append("  Please check the application logs for more technical details about the error.")
-        # If only one part (the intro), and no error_to_diagnose was found, method returns None earlier.
-        # If error_to_diagnose was found but resulted in only the intro line (highly unlikely), this logic is okay.
             
         return "\n".join(advice_parts)
 
